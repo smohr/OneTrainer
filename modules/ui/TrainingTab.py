@@ -327,6 +327,11 @@ class TrainingTab:
                          tooltip="The number of additional clip layers to skip. 0 = the model default")
         components.entry(frame, 3, 1, self.ui_state, "text_encoder_layer_skip")
 
+        # text encoder dropout probability
+        components.label(frame, 4, 0, "Dropout Probability",
+                         tooltip="The Probability for dropping the text encoder conditioning")
+        components.entry(frame, 4, 1, self.ui_state, "text_encoder.dropout_probability")
+
     def __create_text_encoder_1_frame(self, master, row, supports_include: bool = False):
         frame = ctk.CTkFrame(master=master, corner_radius=5)
         frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")

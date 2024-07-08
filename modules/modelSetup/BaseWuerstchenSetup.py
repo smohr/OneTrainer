@@ -251,6 +251,12 @@ class BaseWuerstchenSetup(
                 if model.model_type.is_stable_cascade():
                     pooled_text_text_embedding = batch['pooled_text_encoder_output'].unsqueeze(1)
 
+            # Apply dropout to text embedding
+            dropout_layer = torch.nn.Dropout(p=config.text_encoder.dropout_probability)
+            text_embedding = dropout_layer(text_embedding)
+            if model.model_type.is_stable_cascade():
+                pooled_text_text_embedding = dropout_layer(pooled_text_text_embedding)
+
             latent_input = scaled_noisy_latent_image
 
             if model.model_type.is_wuerstchen_v2():
