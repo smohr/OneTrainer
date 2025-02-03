@@ -401,54 +401,67 @@ class DoRAModule(LoRAModule):
                        **self.layer_kwargs)
 
 class DVoRAModule(DoRAModule):
-    """DVoRA: Combines DoRA's weight decomposition and VeRA's shared random matrices with scaling vectors."""
-
-    def __init__(self, prefix: str, orig_module: nn.Module | None, rank: int, alpha: float, random_seed=42):
+    """
+    DVoRA: Weight-Decomposed Low-Rank Adaptation with VeRA-style frozen projections.
+    Combines DoRA's magnitude-direction decomposition with VeRA's parameter efficiency.
+    """
+    
+    def __init__(self, prefix: str, orig_module: nn.Module | None, rank: int, alpha: float):
         super().__init__(prefix, orig_module, rank, alpha)
-        torch.manual_seed(random_seed)
+        
+        # Initialize per-layer frozen random matrices (device-aware)
+        device = orig_module.weight.device if orig_module else torch.device('cpu')
+        
+        match orig_module:
+            case nn.Linear():
+                self.register_buffer("vera_A", torch.randn(rank, orig_module.in_features, device=device))
+                self.register_buffer("vera_B", torch.randn(orig_module.out_features, rank, device=device))
+            case nn.Conv2d():
+                # For Conv2d: vera_A shape = [rank, in_channels, kernel_size[0], kernel_size[1]]
+                # vera_B shape = [out_channels, rank, 1, 1]
+                self.register_buffer("vera_A", torch.randn(
+                    rank, orig_module.in_channels, *orig_module.kernel_size, device=device
+                ))
+                self.register_buffer("vera_B", torch.randn(
+                    orig_module.out_channels, rank, 1, 1, device=device
+                ))
+            case _:
+                raise NotImplementedError("DVoRA only supports Linear and Conv2d layers")
 
-        # Shared random low-rank matrices initialized globally across layers
-        self.register_buffer("VeRA_random_A", torch.randn(self.rank, self.orig_module.in_features))
-        self.register_buffer("VeRA_random_B", torch.randn(self.orig_module.out_features, self.rank))
-
-        # Learnable scaling vectors to modulate VeRA's updates
-        self.scale_vector_A = nn.Parameter(torch.ones(self.rank))
-        self.scale_vector_B = nn.Parameter(torch.ones(self.rank))
-
-        # Initialize the DoRA components (magnitude vector)
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        super().initialize_weights()
-        orig_weight = get_unquantized_weight(self.orig_module, torch.float, self.train_device)
-
-        # Initialize magnitude (m) using the pre-trained weight
-        self.magnitude_vector = nn.Parameter(orig_weight.norm(dim=1, keepdim=True))
+        # Trainable scaling vectors (layer-specific)
+        self.scale_a = nn.Parameter(torch.ones(rank, device=device))
+        self.scale_b = nn.Parameter(torch.ones(rank, device=device))
 
     def forward(self, x, *args, **kwargs):
         self.check_initialized()
-
-        # Compute VeRA directional updates using shared low-rank random matrices
-        scaled_A = self.VeRA_random_A * self.scale_vector_A.unsqueeze(-1)
-        scaled_B = self.VeRA_random_B * self.scale_vector_B.unsqueeze(0)
-
-        # Compute weight perturbation using VeRA updates
-        VeRA_update = torch.matmul(scaled_B, scaled_A)
-
-        # Compute the complete weight update (DoRA + VeRA)
-        W_dora = self.make_weight(scaled_A, scaled_B) * (self.alpha / self.rank)
-        orig_weight = get_unquantized_weight(self.orig_module, A.dtype, self.train_device)
-        WP = orig_weight + W_dora
-
-        # Normalize (DoRA-specific normalization)
-        norm = (WP.detach().norm(dim=1, keepdim=True) + 1e-6).unsqueeze(-1)
-        WP = self.dora_scale * (WP / norm)
-
-        # Apply update using the operator (F.linear or F.conv2d)
-        return self.op(x, WP, self.orig_module.bias, **self.layer_kwargs)
+        
+        # Get original directional component (V)
+        V = get_unquantized_weight(self.orig_module, self.train_device)
+        
+        # Compute scaled VeRA projections
+        match self.orig_module:
+            case nn.Linear():
+                scaled_A = self.vera_A * self.scale_a.unsqueeze(-1)  # [r, in] * [r, 1]
+                scaled_B = self.vera_B * self.scale_b.unsqueeze(0)    # [out, r] * [1, r]
+            case nn.Conv2d():
+                scaled_A = self.vera_A * self.scale_a.view(-1, 1, 1, 1)  # [r, in, kh, kw]
+                scaled_B = self.vera_B * self.scale_b.view(1, -1, 1, 1)  # [out, r, 1, 1]
+        
+        # Calculate low-rank update \u0394V
+        delta_V = self.make_weight(scaled_A, scaled_B) * (self.alpha / self.rank)
+        
+        # Update and normalize directional component
+        V_updated = V + delta_V
+        eps = torch.finfo(V_updated.dtype).eps
+        norm = V_updated.norm(dim=1, keepdim=True) + eps
+        W = self.dora_scale * (V_updated / norm)
+        
+        # Apply dropout and forward pass
+        return self.op(self.dropout(x), W, self.orig_module.bias, **self.layer_kwargs)
 
 DummyLoRAModule = LoRAModule.make_dummy()
 DummyDoRAModule = DoRAModule.make_dummy()
+DummyDVoRAModule = DVoRAModule.make_dummy()
 DummyLoHaModule = LoHaModule.make_dummy()
 
 
@@ -476,12 +489,11 @@ class LoRAModuleWrapper:
 
         if config.peft_type == PeftType.DVORA:
             self.klass = DVoRAModule
-            self.dummy_klass = DummyDoRAModule
+            self.dummy_klass = DummyDVoRAModule
             self.additional_args = [self.rank, self.alpha]
             self.additional_kwargs = {
-                'random_seed': config.random_seed,
                 'norm_epsilon': config.lora_decompose_norm_epsilon,
-                'train_device': torch.device(config.train_device,)
+                'train_device': torch.device(config.train_device),
             } 
         elif self.peft_type == PeftType.LORA:
             if weight_decompose:
