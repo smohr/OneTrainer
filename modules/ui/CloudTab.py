@@ -1,213 +1,214 @@
-
 import webbrowser
+from typing import Callable # For type hinting
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QGridLayout, QScrollArea, QLabel, QLineEdit,
+    QPushButton, QFrame, QComboBox, QCheckBox, QSizePolicy, QHBoxLayout,
+    QSpacerItem, QTextEdit # Added QTextEdit
+)
+from PySide6.QtCore import Qt
+import modules.util.ui.qt_components as qt_comps # Import new shared components
 
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.CloudAction import CloudAction
 from modules.util.enum.CloudFileSync import CloudFileSync
 from modules.util.enum.CloudType import CloudType
-from modules.util.ui import components
 from modules.util.ui.UIState import UIState
+# import customtkinter as ctk # Removed
+# from modules.util.ui import components # Removed
 
-import customtkinter as ctk
+class CloudTab(QWidget):
+    def __init__(self, train_config: TrainConfig, ui_state: UIState, parent_train_ui, parent_qt_widget: QWidget = None):
+        super().__init__(parent_qt_widget)
 
-
-class CloudTab:
-
-    def __init__(self, master, train_config: TrainConfig, ui_state: UIState, parent):
-        super().__init__()
-
-        self.master = master
         self.train_config = train_config
         self.ui_state = ui_state
-        self.parent = parent
+        self.parent_train_ui = parent_train_ui # Reference to the main TrainUI window
         self.reattach = False
 
-        self.frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
-        self.frame.grid_columnconfigure(0, weight=0)
-        self.frame.grid_columnconfigure(1, weight=1)
-        self.frame.grid_columnconfigure(2, weight=0)
-        self.frame.grid_columnconfigure(3, weight=1)
-        self.frame.grid_columnconfigure(4, weight=0)
-        self.frame.grid_columnconfigure(5, weight=1)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0,0,0,0)
 
-        components.label(self.frame, 0, 0, "Enabled",
-                         tooltip="Enable cloud training")
-        components.switch(self.frame, 0, 1, self.ui_state, "cloud.enabled")
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.main_layout.addWidget(self.scroll_area)
 
-        components.label(self.frame, 1, 0, "Type",
-                         tooltip="Choose LINUX to connect to a linux machine via SSH. Choose RUNPOD for additional functionality such as automatically creating and deleting pods.")
-        components.options_kv(self.frame, 1, 1, [
-            ("RUNPOD", CloudType.RUNPOD),
-            ("LINUX", CloudType.LINUX),
-        ], self.ui_state, "cloud.type")
+        self.scroll_content_widget = QWidget()
+        self.scroll_area.setWidget(self.scroll_content_widget)
 
-        components.label(self.frame, 2, 0, "File sync method",
-                         tooltip="Choose NATIVE_SCP to use scp.exe to transfer files. FABRIC_SFTP uses the Paramiko/Fabric SFTP implementation for file transfers instead.")
-        components.options_kv(self.frame, 2, 1, [
-            ("NATIVE_SCP", CloudFileSync.NATIVE_SCP),
-            ("FABRIC_SFTP", CloudFileSync.FABRIC_SFTP),
-        ], self.ui_state, "cloud.file_sync")
+        self.grid_layout = QGridLayout(self.scroll_content_widget)
+        # Column stretches based on original ctk code (0,1,0,1,0,1)
+        self.grid_layout.setColumnStretch(1, 1)
+        self.grid_layout.setColumnStretch(3, 1)
+        self.grid_layout.setColumnStretch(5, 1)
 
-        components.label(self.frame, 3, 0, "API key",
-                         tooltip="Cloud service API key for RUNPOD. Leave empty for LINUX. This value is stored separately, not saved to your configuration file. ")
-        components.entry(self.frame, 3, 1, self.ui_state, "secrets.cloud.api_key")
+        self.gpu_types_combo = None # To store reference to the GPU types combobox
 
-        components.label(self.frame, 4, 0, "Hostname",
-                         tooltip="SSH server hostname or IP. Leave empty if you have a Cloud ID or want to automatically create a new cloud.")
-        components.entry(self.frame, 4, 1, self.ui_state, "secrets.cloud.host")
+        self._populate_ui()
 
-        components.label(self.frame, 5, 0, "Port",
-                         tooltip="SSH server port. Leave empty if you have a Cloud ID or want to automatically create a new cloud.")
-        components.entry(self.frame, 5, 1, self.ui_state, "secrets.cloud.port")
+    # --- Temporary Helper Methods have been removed. Using qt_components now. ---
 
-        components.label(self.frame, 6, 0, "User",
-                         tooltip='SSH username. Use "root" for RUNPOD. Your SSH client must be set up to connect to the cloud using a public key, without a password. For RUNPOD, create an ed25519 key locally, and copy the contents of the public keyfile to your "SSH Public Keys" on the RunPod website.')
-        components.entry(self.frame, 6, 1, self.ui_state, "secrets.cloud.user")
+    def _create_options_adv_ui_element(self, parent_widget: QWidget, ui_state_key: str, items: list[tuple[str,Any]], 
+                                        tooltip: str = None, command: Callable = None, adv_command: Callable = None) -> QWidget:
+        """
+        Custom helper for options_adv. Creates a QComboBox and a "..." QPushButton.
+        Uses direct QComboBox creation and binding, similar to qt_comps.create_options_kv structure.
+        """
+        widget = QWidget(parent_widget)
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0,0,0,0); layout.setSpacing(5)
 
-        components.label(self.frame, 7, 0, "Cloud id",
-                         tooltip="RUNPOD Cloud ID. The cloud service must have a public IP and SSH service. Leave empty if you want to automatically create a new RUNPOD cloud, or if you're connecting to another cloud provider via SSH Hostname and Port.")
-        components.entry(self.frame, 7, 1, self.ui_state, "secrets.cloud.id")
+        combo = QComboBox(widget)
+        if tooltip: combo.setToolTip(tooltip)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        
+        current_val = self.ui_state.get_var(ui_state_key)
+        selected_idx = 0
+        for idx, (text, data) in enumerate(items): # items are (display_text, data_value)
+            combo.addItem(text, userData=data)
+            if data == current_val: selected_idx = idx
+        if combo.count() > 0 : combo.setCurrentIndex(selected_idx)
 
-        components.label(self.frame, 8, 0, "Tensorboard TCP tunnel",
-                         tooltip="Instead of starting tensorboard locally, make a TCP tunnel to a tensorboard on the cloud")
-        components.switch(self.frame, 8, 1, self.ui_state, "cloud.tensorboard_tunnel")
+        def on_index_changed(idx):
+            if idx >=0:
+                data_val = combo.itemData(idx)
+                self.ui_state.set_var(ui_state_key, data_val)
+                if command: command(data_val)
+        combo.currentIndexChanged.connect(on_index_changed)
+        
+        def update_combo_from_state(new_data_value: Any):
+            for i in range(combo.count()):
+                if combo.itemData(i) == new_data_value:
+                    if combo.currentIndex() != i: combo.setCurrentIndex(i)
+                    return
+            if combo.count() > 0 and combo.currentIndex() != 0 : pass
+        self.ui_state.track_variable(ui_state_key, update_combo_from_state)
+        
+        layout.addWidget(combo)
 
+        adv_button = qt_comps.create_button(widget, "...", adv_command, fixed_width=30)
+        layout.addWidget(adv_button)
+        
+        if ui_state_key == "cloud.gpu_type": 
+            self.gpu_types_combo = combo
+            if not self.gpu_types_combo.count(): # Initial placeholder if items were empty
+                 self.gpu_types_combo.addItem("<Click ... to Load>")
+        return widget
 
+    def _populate_ui(self):
+        layout = self.grid_layout
+        content_widget = self.scroll_content_widget
+        row = 0
 
-        components.label(self.frame, 1, 2, "Remote Directory",
-                         tooltip="The directory on the cloud where files will be uploaded and downloaded.")
-        components.entry(self.frame, 1, 3, self.ui_state, "cloud.remote_dir")
-        components.label(self.frame, 2, 2, "OneTrainer Directory",
-                         tooltip="The directory for OneTrainer on the cloud.")
-        components.entry(self.frame, 2, 3, self.ui_state, "cloud.onetrainer_dir")
-        components.label(self.frame, 3, 2, "Huggingface cache Directory",
-                         tooltip="Huggingface models are downloaded to this remote directory.")
-        components.entry(self.frame, 3, 3, self.ui_state, "cloud.huggingface_cache_dir")
-        components.label(self.frame, 4, 2, "Install OneTrainer",
-                         tooltip="Automatically install OneTrainer from GitHub if the directory doesn't already exist.")
-        components.switch(self.frame, 4, 3, self.ui_state, "cloud.install_onetrainer")
-        components.label(self.frame, 5, 2, "Install command",
-                         tooltip="The command for installing OneTrainer. Leave the default, unless you want to use a development branch of OneTrainer.")
-        components.entry(self.frame, 5, 3, self.ui_state, "cloud.install_cmd")
-        components.label(self.frame, 6, 2, "Update OneTrainer",
-                         tooltip="Update OneTrainer if it already exists on the cloud.")
-        components.switch(self.frame, 6, 3, self.ui_state, "cloud.update_onetrainer")
+        # Group 1 (Column 0 & 1)
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.enabled", "Enabled", "Enable cloud training"), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "cloud.type", [("RUNPOD", CloudType.RUNPOD), ("LINUX", CloudType.LINUX)], "Type", "Choose LINUX or RUNPOD."), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "cloud.file_sync", [("NATIVE_SCP", CloudFileSync.NATIVE_SCP), ("FABRIC_SFTP", CloudFileSync.FABRIC_SFTP)], "File Sync Method", "NATIVE_SCP or FABRIC_SFTP."), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "secrets.cloud.api_key", "API Key", "Cloud service API key for RUNPOD."), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "secrets.cloud.host", "Hostname", "SSH server hostname or IP."), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "secrets.cloud.port", "Port", "SSH server port.", value_type=int), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "secrets.cloud.user", "User", "SSH username (e.g., 'root' for RUNPOD)."), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "secrets.cloud.id", "Cloud ID", "RUNPOD Cloud ID."), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.tensorboard_tunnel", "Tensorboard TCP Tunnel", "Tunnel to remote tensorboard instead of local."), row, 0, 1, 2); row+=1
+        
+        # Group 2 (Column 2 & 3)
+        row_col2 = 1 
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "cloud.remote_dir", "Remote Directory", "Directory on cloud for file exchange."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "cloud.onetrainer_dir", "OneTrainer Directory", "Directory for OneTrainer on cloud."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "cloud.huggingface_cache_dir", "Huggingface Cache Dir", "Remote Huggingface cache."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.install_onetrainer", "Install OneTrainer", "Auto install OneTrainer if not found."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "cloud.install_cmd", "Install Command", "OneTrainer install command."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.update_onetrainer", "Update OneTrainer", "Update OneTrainer if it exists."), row_col2, 2, 1, 2); row_col2+=1
 
-        components.label(self.frame, 8, 2, "Detach remote trainer",
-                         tooltip="Allows the trainer to keep running even if your connection to the cloud is lost.")
-        components.switch(self.frame, 8, 3, self.ui_state, "cloud.detach_trainer")
-        components.label(self.frame, 9, 2, "Reattach id",
-                         tooltip="An id identifying the remotely running trainer. In case you have lost connection or closed OneTrainer, it will try to reattach to this id instead of starting a new remote trainer.")
-        reattach_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
-        reattach_frame.grid(row=9, column=3, padx=0, pady=0, sticky="new")
-        reattach_frame.grid_columnconfigure(0, weight=1)
-        reattach_frame.grid_columnconfigure(1, weight=1)
-        components.entry(reattach_frame, 0, 0, self.ui_state, "cloud.run_id", width=60)
-        components.button(reattach_frame, 0, 1, "Reattach now", self.__reattach)
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.detach_trainer", "Detach Remote Trainer", "Trainer keeps running if connection lost."), 8, 2, 1, 2) 
 
-        components.label(self.frame, 11, 2, "Download samples",
-                         tooltip="Download samples from the remote workspace directory to your local machine.")
-        components.switch(self.frame, 11, 3, self.ui_state, "cloud.download_samples")
-        components.label(self.frame, 12, 2, "Download output model",
-                         tooltip="Download the final model after training. You can disable this if you plan to use an automatically saved checkpoint instead.")
-        components.switch(self.frame, 12, 3, self.ui_state, "cloud.download_output_model")
-        components.label(self.frame, 13, 2, "Download saved checkpoints",
-                         tooltip="Download the automatically saved training checkpoints from the remote workspace directory to your local machine.")
-        components.switch(self.frame, 13, 3, self.ui_state, "cloud.download_saves")
-        components.label(self.frame, 14, 2, "Download backups",
-                         tooltip="Download backups from the remote workspace directory to your local machine. It's usually not necessary to download them, because as long as the backups are still available on the cloud, the training can be restarted using one of the cloud's backups.")
-        components.switch(self.frame, 14, 3, self.ui_state, "cloud.download_backups")
-        components.label(self.frame, 15, 2, "Download tensorboard logs",
-                         tooltip="Download TensorBoard event logs from the remote workspace directory to your local machine. They can then be viewed locally in TensorBoard. It is recommended to disable \"Sample to TensorBoard\" to reduce the event log size.")
-        components.switch(self.frame, 15, 3, self.ui_state, "cloud.download_tensorboard")
-        components.label(self.frame, 16, 2, "Delete remote workspace",
-                         tooltip="Delete the workspace directory on the cloud after training has finished successfully and data has been downloaded.")
-        components.switch(self.frame, 16, 3, self.ui_state, "cloud.delete_workspace")
+        # Reattach frame
+        layout.addWidget(qt_comps.create_label(content_widget, "Reattach ID", "ID of running trainer to reattach to."), 9, 2)
+        reattach_frame = QFrame(content_widget); reattach_layout = QHBoxLayout(reattach_frame); reattach_layout.setContentsMargins(0,0,0,0)
+        reattach_entry_container = qt_comps.create_entry(reattach_frame, self.ui_state, "cloud.run_id", label_text=None, placeholder_text="ID")
+        if reattach_entry_container.layout() and isinstance(reattach_entry_container.layout().itemAt(0).widget(), QLineEdit): # Assuming label_on_left=False (default)
+             reattach_entry_container.layout().itemAt(0).widget().setFixedWidth(80) # Set fixed width on QLineEdit
+        reattach_layout.addWidget(reattach_entry_container)
+        reattach_layout.addWidget(qt_comps.create_button(reattach_frame, "Reattach now", self.__reattach))
+        reattach_layout.addStretch(1)
+        layout.addWidget(reattach_frame, 9, 3)
 
-        components.label(self.frame, 1, 4, "Create cloud via API",
-                         tooltip="Automatically creates a new cloud instance if both Host:Port and Cloud ID are empty. Currently supported for RUNPOD.")
-        create_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
-        create_frame.grid(row=1, column=5, padx=0, pady=0, sticky="new")
-        create_frame.grid_columnconfigure(0, weight=0)
-        create_frame.grid_columnconfigure(1, weight=1)
-        components.switch(create_frame, 0, 0, self.ui_state, "cloud.create")
-        components.button(create_frame, 0, 1, "Create cloud via website", self.__create_cloud)
+        row_col2 = 11 
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.download_samples", "Download Samples", "Download samples to local machine."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.download_output_model", "Download Output Model", "Download final model after training."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.download_saves", "Download Saved Checkpoints", "Download automatic checkpoints."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.download_backups", "Download Backups", "Download backups."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.download_tensorboard", "Download Tensorboard Logs", "Download TensorBoard event logs."), row_col2, 2, 1, 2); row_col2+=1
+        layout.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "cloud.delete_workspace", "Delete Remote Workspace", "Delete cloud workspace after training."), row_col2, 2, 1, 2)
 
-        components.label(self.frame, 2, 4, "Cloud name",
-                         tooltip="The name of the new cloud instance.")
-        components.entry(self.frame, 2, 5, self.ui_state, "cloud.name")
-        components.label(self.frame, 3, 4, "Type",
-                         tooltip="Select the RunPod cloud type. See RunPod's website for details.")
-        components.options_kv(self.frame, 3, 5, [
-            ("", ""),
-            ("Community", "COMMUNITY"),
-            ("Secure", "SECURE"),
-        ], self.ui_state, "cloud.sub_type")
+        # Group 3 (Column 4 & 5)
+        row_col4 = 1
+        layout.addWidget(qt_comps.create_label(content_widget, "Create cloud via API", "Auto-create RUNPOD instance if ID/Host empty."), row_col4, 4)
+        create_frame = QFrame(content_widget); create_layout = QHBoxLayout(create_frame); create_layout.setContentsMargins(0,0,0,0)
+        create_layout.addWidget(qt_comps.create_switch(create_frame, self.ui_state, "cloud.create", ""))
+        create_layout.addWidget(qt_comps.create_button(create_frame, "Create cloud via website", self.__create_cloud))
+        create_layout.addStretch(1)
+        layout.addWidget(create_frame, row_col4, 5); row_col4+=1
 
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "cloud.name", "Cloud Name", "Name of new cloud instance."), row_col4, 4, 1, 2); row_col4+=1
+        layout.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "cloud.sub_type", [("", ""), ("Community", "COMMUNITY"), ("Secure", "SECURE")], "Type (RunPod)", "RunPod cloud type (Community/Secure)."), row_col4, 4, 1, 2); row_col4+=1
+        
+        layout.addWidget(qt_comps.create_label(content_widget, "GPU (RunPod)", "Select GPU type (needs API key)."), row_col4, 4)
+        layout.addWidget(self._create_options_adv_ui_element(content_widget, "cloud.gpu_type", [("", "")], adv_command=self.__set_gpu_types), row_col4, 5); row_col4+=1
+        
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "cloud.volume_size", "Volume Size (GB)", "Storage volume size (not network volume).", value_type=int), row_col4, 4, 1, 2); row_col4+=1
+        layout.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "cloud.min_download", "Min Download (Mbps)", "Minimum download speed of cloud.", value_type=int), row_col4, 4, 1, 2); row_col4+=1
+        
+        row_col4+=1 # Spacer row
+        
+        actions = [("None", CloudAction.NONE), ("Stop", CloudAction.STOP), ("Delete", CloudAction.DELETE)]
+        layout.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "cloud.on_finish", actions, "Action on Finish", "Action when training finishes."), row_col4, 4, 1, 2); row_col4+=1
+        layout.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "cloud.on_error", actions, "Action on Error", "Action if training errors."), row_col4, 4, 1, 2); row_col4+=1
+        layout.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "cloud.on_detached_finish", actions, "Action on Detached Finish", "Action if detached and finishes."), row_col4, 4, 1, 2); row_col4+=1
+        layout.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "cloud.on_detached_error", actions, "Action on Detached Error", "Action if detached and errors."), row_col4, 4, 1, 2)
 
-        components.label(self.frame, 4, 4, "GPU",
-                         tooltip="Select the GPU type. Enter an API key before pressing the button.")
+        self.grid_layout.setRowStretch(max(row, row_col2, row_col4) + 1, 1)
 
-        _,gpu_components=components.options_adv(self.frame, 4, 5, [("")], self.ui_state, "cloud.gpu_type",adv_command=self.__set_gpu_types)
-        self.gpu_types_menu=gpu_components['component']
-
-        components.label(self.frame, 5, 4, "Volume size",
-                         tooltip="Set the storage volume size in GB. This volume persists only until the cloud is deleted - not a RunPod network volume")
-        components.entry(self.frame, 5, 5, self.ui_state, "cloud.volume_size")
-
-        components.label(self.frame, 6, 4, "Min download",
-                         tooltip="Set the minimum download speed of the cloud in Mbps.")
-        components.entry(self.frame, 6, 5, self.ui_state, "cloud.min_download")
-
-        components.label(self.frame, 8, 4, "Action on finish",
-                         tooltip="What to do when training finishes and the data has been fully downloaded: Stop or delete the cloud, or do nothing.")
-        components.options_kv(self.frame, 8, 5, [
-            ("None", CloudAction.NONE),
-            ("Stop", CloudAction.STOP),
-            ("Delete", CloudAction.DELETE),
-        ], self.ui_state, "cloud.on_finish")
-
-        components.label(self.frame, 9, 4, "Action on error",
-                         tooltip="What to do if training stops due to an error: Stop or delete the cloud, or do nothing. Data may be lost.")
-        components.options_kv(self.frame, 9, 5, [
-            ("None", CloudAction.NONE),
-            ("Stop", CloudAction.STOP),
-            ("Delete", CloudAction.DELETE),
-        ], self.ui_state, "cloud.on_error")
-
-        components.label(self.frame, 10, 4, "Action on detached finish",
-                         tooltip="What to do when training finishes, but the client has been detached and cannot download data. Data may be lost.")
-        components.options_kv(self.frame, 10, 5, [
-            ("None", CloudAction.NONE),
-            ("Stop", CloudAction.STOP),
-            ("Delete", CloudAction.DELETE),
-        ], self.ui_state, "cloud.on_detached_finish")
-
-        components.label(self.frame, 11, 4, "Action on detached error",
-                         tooltip="What to if training stops due to an error, but the client has been detached and cannot download data. Data may be lost.")
-        components.options_kv(self.frame, 11, 5, [
-            ("None", CloudAction.NONE),
-            ("Stop", CloudAction.STOP),
-            ("Delete", CloudAction.DELETE),
-        ], self.ui_state, "cloud.on_detached_error")
-
-        self.frame.pack(fill="both", expand=1)
 
     def __set_gpu_types(self):
-        self.gpu_types_menu.configure(values=[])
+        if not self.gpu_types_combo: return
+        self.gpu_types_combo.clear()
         if self.train_config.cloud.type == CloudType.RUNPOD:
-            import runpod
-            runpod.api_key=self.train_config.secrets.cloud.api_key
-            gpus=runpod.get_gpus()
-            self.gpu_types_menu.configure(values=[gpu['id'] for gpu in gpus])
+            try:
+                import runpod
+                runpod.api_key = self.train_config.secrets.cloud.api_key
+                if not runpod.api_key:
+                    print("RunPod API key is missing. Cannot fetch GPU types.") # Or show in a status bar
+                    self.gpu_types_combo.addItem("<API Key Missing>")
+                    return
+                gpus = runpod.get_gpus()
+                for gpu in gpus:
+                    self.gpu_types_combo.addItem(gpu['id'], userData=gpu['id'])
+            except ImportError:
+                print("RunPod library not installed.")
+                self.gpu_types_combo.addItem("<RunPod Lib Missing>")
+            except Exception as e:
+                print(f"Error fetching RunPod GPUs: {e}")
+                self.gpu_types_combo.addItem("<Error Fetching>")
+        else:
+            self.gpu_types_combo.addItem("<N/A for Linux>")
+
 
     def __reattach(self):
-        self.reattach=True
+        self.reattach = True
         try:
-            self.parent.start_training()
+            if self.parent_train_ui and hasattr(self.parent_train_ui, 'start_training'):
+                self.parent_train_ui.start_training()
+            else:
+                print("Error: Cannot call start_training on parent_train_ui.")
         finally:
-            self.reattach=False
+            self.reattach = False
 
     def __create_cloud(self):
         if self.train_config.cloud.type == CloudType.RUNPOD:
             webbrowser.open("https://www.runpod.io/console/deploy?template=1a33vbssq9&type=gpu", new=0, autoraise=False)
+            
+    # Public method for TrainUI to call if needed
+    def refresh_ui(self): # For example, if API key changes, might need to refresh GPU list
+        self._populate_ui() # Re-populating might be too much, selective update is better
+        self.__set_gpu_types() # Specifically refresh GPU types if relevant state changes

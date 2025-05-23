@@ -1,119 +1,172 @@
-from modules.ui.ConfigList import ConfigList
-from modules.util.config.TrainConfig import TrainConfig
+from typing import List, Dict, Any, Callable, Optional
+
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
+    QPushButton, QFrame, QSizePolicy
+)
+from PySide6.QtCore import Qt, Signal, Slot, QTimer
+from PySide6.QtGui import QIcon
+
+import modules.util.ui.qt_components as qt_comps
+from modules.ui.ConfigListBase import ConfigListBase # Assuming this path is correct
+from modules.util.config.TrainConfig import TrainConfig # For type hinting
 from modules.util.enum.LearningRateScheduler import LearningRateScheduler
-from modules.util.ui import components
-from modules.util.ui.ui_utils import set_window_icon
+from modules.util.ui.ui_utils import get_icon_path
 from modules.util.ui.UIState import UIState
 
-import customtkinter as ctk
 
+class KvWidget(QFrame):
+    """Widget for a single Key-Value pair, used in KvParams list."""
+    remove_requested = Signal(int) # Signal to request removal, providing its index
 
-class KvParams(ConfigList):
-    def __init__(self, master, train_config: TrainConfig, ui_state: UIState):
-        super().__init__(
-            master,
-            train_config,
-            ui_state,
-            attr_name="scheduler_params",
-            from_external_file=False,
-            add_button_text="add parameter",
-            is_full_width=True
+    def __init__(self, element_data_dict: Dict[str, str], index: int, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setFrameShape(QFrame.Shape.StyledPanel) # Add a bit of styling
+        self.setObjectName("KvWidgetFrame")
+
+        self.element_data_dict = element_data_dict # This is a dict like {"key": "k", "value": "v"}
+        # UIState specifically for this dict element.
+        # Pass None as parent to UIState as it's managed by the widget's lifecycle.
+        self.ui_state_kv_pair = UIState(self.element_data_dict, self) 
+        self.index = index
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(2,2,2,2) # Minimal margins
+        layout.setSpacing(5)
+
+        # Remove Button
+        remove_button = qt_comps.create_button(
+            parent_widget=self, text="X", command=lambda: self.remove_requested.emit(self.index),
+            tooltip="Remove this parameter", fixed_width=25, fixed_height=25
         )
+        remove_button.setStyleSheet("QPushButton { color: white; background-color: #C00000; }")
+        layout.addWidget(remove_button)
 
-    def refresh_ui(self):
-        self._create_element_list()
+        # Key Entry (using qt_comps.create_entry which returns a container with label+entry)
+        # Since we don't want a visible label "Key" for each row, we pass label_text=None
+        key_entry_container = qt_comps.create_entry(
+            parent_widget=self, ui_state=self.ui_state_kv_pair, key_path="key", 
+            placeholder_text="Parameter Name", label_text=None,
+            tooltip="Key name for an argument in your scheduler"
+        )
+        layout.addWidget(key_entry_container, 1) # Stretch factor 1
 
-    def create_widget(self, master, element, i, open_command, remove_command, clone_command, save_command):
-        return KvWidget(master, element, i, open_command, remove_command, clone_command, save_command)
+        # Value Entry
+        value_entry_container = qt_comps.create_entry(
+            parent_widget=self, ui_state=self.ui_state_kv_pair, key_path="value",
+            placeholder_text="Parameter Value", label_text=None,
+            tooltip="Value for an argument. Special values: %LR%, %EPOCHS%, %STEPS_PER_EPOCH%, %TOTAL_STEPS%, %SCHEDULER_STEPS% (Note: OneTrainer calls step() per learning step, not epoch)."
+        )
+        layout.addWidget(value_entry_container, 1) # Stretch factor 1
+        
+        # Original code had save_command on FocusOut.
+        # qt_comps.create_entry calls ui_state.set_var on editingFinished, which updates the dict.
+        # The ConfigListBase/SchedulerParamsWindow would be responsible for saving the whole TrainConfig if needed.
 
-    def create_new_element(self) -> dict[str, str]:
+class KvParams(ConfigListBase):
+    """Manages a list of Key-Value parameter widgets."""
+    def __init__(self, parent_widget: QWidget, train_config_instance: TrainConfig):
+        super().__init__(parent_widget, add_button_text="Add Scheduler Parameter")
+        
+        self.train_config = train_config_instance # Reference to the main TrainConfig
+
+        # Ensure the scheduler_params list exists on train_config
+        if not hasattr(self.train_config, "scheduler_params") or \
+           not isinstance(self.train_config.scheduler_params, list):
+            self.train_config.scheduler_params = []
+
+        self.items_layout = QVBoxLayout(self.scroll_content_widget)
+        self.items_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.scroll_content_widget.setLayout(self.items_layout)
+
+        self.refresh_list_display() # Load initial items
+
+    def create_widget(self, element_data: Dict[str, str], index: int) -> KvWidget:
+        # element_data is one of the dicts from self.train_config.scheduler_params
+        widget = KvWidget(element_data, index, self.scroll_content_widget)
+        widget.remove_requested.connect(self.remove_element_slot)
+        return widget
+
+    def create_new_element(self) -> Dict[str, str]:
         return {"key": "", "value": ""}
 
-    def open_element_window(self, i, ui_state):
-        pass
+    @Slot()
+    def on_add_new_element(self):
+        new_kv_pair = self.create_new_element()
+        self.train_config.scheduler_params.append(new_kv_pair)
+        # Changes are live on self.train_config. No separate save file for this list.
+        self.refresh_list_display()
+
+    @Slot(int)
+    def remove_element_slot(self, index: int):
+        if 0 <= index < len(self.train_config.scheduler_params):
+            del self.train_config.scheduler_params[index]
+            self.refresh_list_display()
+            # Changes are live on self.train_config.
+
+    def refresh_list_display(self):
+        self._clear_layout(self.items_layout)
+        for i, kv_pair_dict in enumerate(self.train_config.scheduler_params):
+            widget = self.create_widget(kv_pair_dict, i)
+            self.items_layout.addWidget(widget)
+        self.items_layout.addStretch(1) # Push items to top
 
 
-class KvWidget(ctk.CTkFrame):
-    def __init__(self, master, element, i, open_command, remove_command, clone_command, save_command):
-        super().__init__(master=master, bg_color="transparent")
-        self.element = element
-        self.ui_state = UIState(self, element)
-        self.i = i
-        self.save_command = save_command
+class SchedulerParamsWindow(QDialog):
+    def __init__(self, parent_training_tab: QWidget, train_config: TrainConfig, ui_state_train_config: UIState, *args, **kwargs):
+        super().__init__(parent_training_tab, *args, **kwargs)
 
-        self.grid_columnconfigure(0, weight=0)
-        self.grid_columnconfigure(1, weight=1, uniform=1)
-        self.grid_columnconfigure(2, weight=1, uniform=1)
+        self.train_config = train_config # Main TrainConfig
+        self.ui_state_train_config = ui_state_train_config # UIState for the main TrainConfig
 
-        close_button = ctk.CTkButton(
-            master=self,
-            width=20,
-            height=20,
-            text="X",
-            corner_radius=2,
-            fg_color="#C00000",
-            command=lambda: remove_command(self.i))
-        close_button.grid(row=0, column=0)
+        self.setWindowTitle("Learning Rate Scheduler Settings")
+        self.setMinimumSize(600, 400)
 
-        # Key
-        tooltip_key = "Key name for an argument in your scheduler"
-        self.key = components.entry(self, 0, 1, self.ui_state, "key",
-                                    tooltip=tooltip_key, wide_tooltip=True)
-        self.key.bind("<FocusOut>", lambda _: save_command())
-        self.key.configure(width=50)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10,10,10,10)
+        main_layout.setSpacing(10)
 
-        # Value
-        tooltip_val = "Value for an argument in your scheduler. Some special values can be used, wrapped in percent signs: LR, EPOCHS, STEPS_PER_EPOCH, TOTAL_STEPS, SCHEDULER_STEPS. Note that OneTrainer calls step() after every individual learning step, not every epoch, so what Torch calls 'epoch' you should treat as 'step'."
-        self.value = components.entry(self, 0, 2, self.ui_state, "value",
-                                      tooltip=tooltip_val, wide_tooltip=True)
-        self.value.bind("<FocusOut>", lambda _: save_command())
-        self.value.configure(width=50)
+        # Conditional UI for Custom Scheduler Class Name
+        self.custom_scheduler_class_name_widget_container: Optional[QWidget] = None
+        if self.train_config.learning_rate_scheduler == LearningRateScheduler.CUSTOM:
+            self.custom_scheduler_class_name_widget_container = qt_comps.create_entry(
+                parent_widget=self, 
+                ui_state=self.ui_state_train_config, # Use main UIState
+                key_path="custom_learning_rate_scheduler", # Path within TrainConfig
+                label_text="Custom Scheduler Class:", 
+                tooltip="Python class module and name, e.g., mymodule.MyScheduler"
+            )
+            main_layout.addWidget(self.custom_scheduler_class_name_widget_container)
 
-    def place_in_list(self):
-        self.grid(row=self.i, column=0, padx=5, pady=5, sticky="new")
+        # Key-Value Parameters List
+        params_label = qt_comps.create_label(self, "Scheduler Parameters (Key-Value Pairs):")
+        params_label.setStyleSheet("font-weight: bold;")
+        main_layout.addWidget(params_label)
+        
+        self.params_list_widget = KvParams(self, self.train_config)
+        main_layout.addWidget(self.params_list_widget, 1) # Make list stretch
 
+        # OK Button
+        self.ok_button = qt_comps.create_button(self, "OK", command=self.accept)
+        ok_button_layout = QHBoxLayout()
+        ok_button_layout.addStretch(1)
+        ok_button_layout.addWidget(self.ok_button)
+        main_layout.addLayout(ok_button_layout)
 
-class SchedulerParamsWindow(ctk.CTkToplevel):
-    def __init__(self, parent, train_config: TrainConfig, ui_state, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
+        QTimer.singleShot(100, self._late_init)
+        self.setModal(True)
 
-        self.parent = parent
-        self.train_config = train_config
-        self.ui_state = ui_state
+    def _late_init(self):
+        icon_p = get_icon_path()
+        if icon_p: self.setWindowIcon(QIcon(icon_p))
+        self.activateWindow()
+        self.raise_()
+        self.ok_button.setFocus()
 
-        self.title("Learning Rate Scheduler Settings")
-        self.geometry("800x400")
-        self.resizable(True, True)
+    # No specific on_window_close needed if accept/reject is sufficient.
+    # Changes to scheduler_params are live in self.train_config via UIState in KvWidget.
+    # The main TrainUI is responsible for saving the overall TrainConfig.
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=0)
-        self.grid_columnconfigure(0, weight=1)
-
-        self.frame = ctk.CTkFrame(self)
-        self.frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        self.frame.grid_columnconfigure(0, weight=0)
-        self.frame.grid_columnconfigure(1, weight=1)
-
-        self.expand_frame = ctk.CTkFrame(self.frame, bg_color="transparent")
-        self.expand_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
-
-        components.button(self, 1, 0, "ok", command=self.on_window_close)
-        self.main_frame(self.frame)
-
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
-        self.after(200, lambda: set_window_icon(self))
-
-
-    def main_frame(self, master):
-        if self.train_config.learning_rate_scheduler is LearningRateScheduler.CUSTOM:
-            components.label(master, 0, 0, "Class Name",
-                             tooltip="Python class module and name for the custom scheduler class, in the form of <module>.<class_name>.")
-            components.entry(master, 0, 1, self.ui_state, "custom_learning_rate_scheduler")
-
-        # Any additional parameters, in key-value form.
-        self.params = KvParams(self.expand_frame, self.train_config, self.ui_state)
-
-    def on_window_close(self):
-        self.destroy()
+    def done(self, result: int): # Override done to ensure cursor is restored (if ever set)
+        QApplication.restoreOverrideCursor() # Just in case
+        super().done(result)

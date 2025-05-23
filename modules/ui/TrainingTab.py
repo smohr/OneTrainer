@@ -1,7 +1,17 @@
-from modules.ui.OffloadingWindow import OffloadingWindow
-from modules.ui.OptimizerParamsWindow import OptimizerParamsWindow
-from modules.ui.SchedulerParamsWindow import SchedulerParamsWindow
-from modules.ui.TimestepDistributionWindow import TimestepDistributionWindow
+from typing import Callable
+
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QScrollArea, QLabel,
+    QLineEdit, QComboBox, QPushButton, QFrame, QSizePolicy, QCheckBox
+)
+from PySide6.QtCore import Qt
+import modules.util.ui.qt_components as qt_comps # Import new shared components
+
+# from modules.ui.OffloadingWindow import OffloadingWindow # TODO: Refactor to QDialog
+from modules.ui.OptimizerParamsWindow import OptimizerParamsWindow # TODO: Refactor to QDialog
+from modules.ui.SchedulerParamsWindow import SchedulerParamsWindow # Import refactored dialog
+# from modules.ui.TimestepDistributionWindow import TimestepDistributionWindow # TODO: Refactor to QDialog
+
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.DataType import DataType
 from modules.util.enum.EMAMode import EMAMode
@@ -13,54 +23,119 @@ from modules.util.enum.LossWeight import LossWeight
 from modules.util.enum.Optimizer import Optimizer
 from modules.util.enum.TimestepDistribution import TimestepDistribution
 from modules.util.optimizer_util import change_optimizer
-from modules.util.ui import components
 from modules.util.ui.UIState import UIState
 
-import customtkinter as ctk
 
+class TrainingTab(QWidget):
+    def __init__(self, train_config: TrainConfig, ui_state: UIState, parent: QWidget = None):
+        super().__init__(parent)
 
-class TrainingTab:
-
-    def __init__(self, master, train_config: TrainConfig, ui_state: UIState):
-        super().__init__()
-
-        self.master = master
         self.train_config = train_config
         self.ui_state = ui_state
 
-        master.grid_rowconfigure(0, weight=1)
-        master.grid_columnconfigure(0, weight=1)
+        # Main layout for the TrainingTab widget itself
+        self.tab_main_layout = QVBoxLayout(self)
+        self.tab_main_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.scroll_frame = None
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.tab_main_layout.addWidget(self.scroll_area)
+
+        self.scroll_area_content_widget = QWidget()
+        self.scroll_area.setWidget(self.scroll_area_content_widget)
+
+        # This QHBoxLayout will hold the columns
+        self.columns_layout = QHBoxLayout(self.scroll_area_content_widget)
+
+        self.lr_scheduler_comp = None # Will be QComboBox from qt_comps
+        self.lr_scheduler_adv_comp = None # Will be QPushButton for "..."
 
         self.refresh_ui()
 
+    # --- Temporary Helper Methods have been removed. Using qt_components now. ---
+
+    def _create_options_adv_ui_element(self, parent_widget: QWidget, ui_state_key: str, items: list[tuple[str,Any]], tooltip: str = None, command: Callable = None, adv_command: Callable = None) -> QWidget:
+        """
+        Custom helper for options_adv since qt_components.create_options_kv returns a container with a label.
+        This creates a QComboBox and a "..." QPushButton in a QHBoxLayout, without an external label.
+        """
+        widget = QWidget(parent_widget)
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0,0,0,0)
+        layout.setSpacing(5)
+
+        # Manually create QComboBox part for options_adv, similar to qt_comps.create_options_kv but without its own label/container
+        combo = QComboBox(widget)
+        if tooltip: combo.setToolTip(tooltip)
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        
+        current_val = self.ui_state.get_var(ui_state_key)
+        selected_idx = 0
+        for idx, (text, data) in enumerate(items):
+            combo.addItem(text, userData=data)
+            if data == current_val: selected_idx = idx
+        if combo.count() > 0 : combo.setCurrentIndex(selected_idx)
+
+        def on_index_changed(idx): # Renamed index to idx to avoid conflict
+            if idx >=0:
+                data_val = combo.itemData(idx)
+                self.ui_state.set_var(ui_state_key, data_val)
+                if command: command(data_val)
+        combo.currentIndexChanged.connect(on_index_changed)
+        
+        # Two-way binding for ComboBox
+        def update_combo_from_state(new_data_value: Any):
+            for i in range(combo.count()):
+                if combo.itemData(i) == new_data_value:
+                    if combo.currentIndex() != i: combo.setCurrentIndex(i)
+                    return
+            if combo.count() > 0 and combo.currentIndex() != 0 : pass # Defaulting logic can be tricky
+        self.ui_state.track_variable(ui_state_key, update_combo_from_state)
+        
+        layout.addWidget(combo)
+
+        adv_button = qt_comps.create_button(widget, "...", adv_command, fixed_width=30)
+        layout.addWidget(adv_button)
+        
+        if ui_state_key == "learning_rate_scheduler":
+            self.lr_scheduler_comp = combo
+            self.lr_scheduler_adv_comp = adv_button
+            # Initial state of adv_button based on loaded value
+            self.__restore_scheduler_config(current_val) # current_val is the initial value for scheduler
+
+        return widget
+
+
     def refresh_ui(self):
-        if self.scroll_frame:
-            self.scroll_frame.destroy()
+        # Clear existing columns from columns_layout
+        while self.columns_layout.count():
+            item = self.columns_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
 
-        self.scroll_frame = ctk.CTkScrollableFrame(self.master, fg_color="transparent")
-        self.scroll_frame.grid(row=0, column=0, sticky="nsew")
+        column_0 = QFrame()
+        col0_layout = QVBoxLayout(column_0)
+        col0_layout.setContentsMargins(0,0,0,0)
+        column_0.setLayout(col0_layout)
+        
+        column_1 = QFrame()
+        col1_layout = QVBoxLayout(column_1)
+        col1_layout.setContentsMargins(0,0,0,0)
+        column_1.setLayout(col1_layout)
 
-        self.scroll_frame.grid_columnconfigure(0, weight=1)
-        self.scroll_frame.grid_columnconfigure(1, weight=1)
-        self.scroll_frame.grid_columnconfigure(2, weight=1)
+        column_2 = QFrame()
+        col2_layout = QVBoxLayout(column_2)
+        col2_layout.setContentsMargins(0,0,0,0)
+        column_2.setLayout(col2_layout)
 
-        column_0 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
-        column_0.grid(row=0, column=0, sticky="nsew")
-        column_0.grid_columnconfigure(0, weight=1)
-
-        column_1 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
-        column_1.grid(row=0, column=1, sticky="nsew")
-        column_1.grid_columnconfigure(0, weight=1)
-
-        column_2 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
-        column_2.grid(row=0, column=2, sticky="nsew")
-        column_2.grid_columnconfigure(0, weight=1)
+        self.columns_layout.addWidget(column_0, 1) # Weight 1 for each column
+        self.columns_layout.addWidget(column_1, 1)
+        self.columns_layout.addWidget(column_2, 1)
 
         if self.train_config.model_type.is_stable_diffusion():
             self.__setup_stable_diffusion_ui(column_0, column_1, column_2)
-        if self.train_config.model_type.is_stable_diffusion_3():
+        elif self.train_config.model_type.is_stable_diffusion_3():
             self.__setup_stable_diffusion_3_ui(column_0, column_1, column_2)
         elif self.train_config.model_type.is_stable_diffusion_xl():
             self.__setup_stable_diffusion_xl_ui(column_0, column_1, column_2)
@@ -76,17 +151,207 @@ class TrainingTab:
             self.__setup_hunyuan_video_ui(column_0, column_1, column_2)
         elif self.train_config.model_type.is_hi_dream():
             self.__setup_hi_dream_ui(column_0, column_1, column_2)
+        
+        # Add stretch to each column layout to push frames to the top
+        col0_layout.addStretch(1)
+        col1_layout.addStretch(1)
+        col2_layout.addStretch(1)
+        
+    def _add_frame_to_column(self, column_widget: QFrame, title: str = None) -> QGridLayout:
+        # Creates a new QFrame, adds it to the column's QVBoxLayout, and returns a QGridLayout for content
+        frame = QFrame()
+        frame.setObjectName("groupFrame") # For potential styling
+        frame.setFrameShape(QFrame.Shape.StyledPanel) # Gives it a border
+        # frame.setFrameShadow(QFrame.Shadow.Raised)
+        
+        frame_layout = QVBoxLayout(frame) # Main layout for this new frame (holds title + grid)
+        if title:
+            title_label = QLabel(title)
+            title_label.setStyleSheet("font-weight: bold;") # Basic title styling
+            frame_layout.addWidget(title_label)
 
+        content_grid_layout = QGridLayout() # Grid for the actual controls
+        frame_layout.addLayout(content_grid_layout)
+        
+        column_widget.layout().addWidget(frame) # Add this new frame to the passed column widget
+        return content_grid_layout
+
+
+    def __create_base_frame(self, column: QFrame, row_idx_in_col_layout: int): # row_idx_in_col_layout not directly used with QVBoxLayout for columns
+        grid = self._add_frame_to_column(column, "Base Training")
+        content_widget = column # Parent for qt_comps helpers
+        r = 0
+        grid.addWidget(qt_comps.create_label(content_widget, "Optimizer", "The type of optimizer"), r, 0)
+        grid.addWidget(self._create_options_adv_ui_element(content_widget, "optimizer.optimizer", [(str(x), x) for x in list(Optimizer)], command=self.__restore_optimizer_config, adv_command=self.__open_optimizer_params_window), r, 1)
+        r+=1
+        grid.addWidget(qt_comps.create_label(content_widget, "Learning Rate Scheduler", "Learning rate scheduler..."), r, 0)
+        grid.addWidget(self._create_options_adv_ui_element(content_widget, "learning_rate_scheduler", [(str(x), x) for x in list(LearningRateScheduler)], command=self.__restore_scheduler_config, adv_command=self.__open_scheduler_params_window), r, 1)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "learning_rate", "Learning Rate", "The base learning rate", value_type=float), r, 0, 1, 2) # Spans 2 columns
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "learning_rate_warmup_steps", "LR Warmup Steps", "Number of steps for LR warmup...", placeholder_text="e.g. 0 or 0.1"), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "learning_rate_min_factor", "LR Min Factor", "Final LR will be initial_lr * min_factor", value_type=float), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "learning_rate_cycles", "LR Cycles", "Number of learning rate cycles...", value_type=int), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "epochs", "Epochs", "Number of epochs for a full training run", value_type=int), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "batch_size", "Batch Size", "Batch size for one training step", value_type=int), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "gradient_accumulation_steps", "Accumulation Steps", "Number of gradient accumulation steps", value_type=int), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "learning_rate_scaler", [(str(x), x) for x in list(LearningRateScaler)], "Learning Rate Scaler", "LR scaling: LR * SQRT(selection)"), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "clip_grad_norm", "Clip Grad Norm", "Clips gradient norm. Empty to disable.", value_type=float), r, 0, 1, 2)
+        grid.setColumnStretch(1,1) # Ensure the entry/widget part of the container stretches
+
+
+    def __create_base2_frame(self, column: QFrame, row_idx_in_col_layout: int, video_training_enabled: bool = False):
+        grid = self._add_frame_to_column(column, "Advanced Base")
+        content_widget = column
+        r = 0
+        grid.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "ema", [(str(x), x) for x in list(EMAMode)], "EMA", "EMA averages training progress..."), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "ema_decay", "EMA Decay", "EMA decay parameter...", value_type=float), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "ema_update_step_interval", "EMA Update Step Interval", "Steps between EMA updates", value_type=int), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_label(content_widget, "Gradient Checkpointing", "Enables gradient checkpointing..."), r, 0) # Label for options_adv
+        grid.addWidget(self._create_options_adv_ui_element(content_widget, "gradient_checkpointing", [(str(x), x) for x in list(GradientCheckpointingMethod)], adv_command=self.__open_offloading_window), r, 1)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "layer_offload_fraction", "Layer Offload Fraction", "Offload layers to reduce VRAM... (0-1)", value_type=float), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "train_dtype", [("float32", DataType.FLOAT_32), ("float16", DataType.FLOAT_16), ("bfloat16", DataType.BFLOAT_16), ("tfloat32", DataType.TFLOAT_32)], "Train Data Type", "Mixed precision for training..."), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "fallback_train_dtype", [("float32", DataType.FLOAT_32), ("bfloat16", DataType.BFLOAT_16)], "Fallback Train Data Type", "Mixed precision for unsupported float16 stages..."), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "enable_autocast_cache", "Autocast Cache", "Enable autocast cache..."), r, 0, 1, 2)
+        r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "resolution", "Resolution", "Training resolution(s)..."), r, 0, 1, 2)
+        r+=1
+        if video_training_enabled:
+            grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "frames", "Frames", "Number of frames for video training.", value_type=int), r, 0, 1, 2)
+            r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "force_circular_padding", "Force Circular Padding", "Enable circular padding for seamless images."), r, 0, 1, 2)
+        grid.setColumnStretch(1,1)
+
+    def __create_text_encoder_frame(self, column: QFrame, row_idx_in_col_layout: int):
+        grid = self._add_frame_to_column(column, "Text Encoder")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "text_encoder.train", "Train Text Encoder", "Enables training the text encoder model"), r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "text_encoder.dropout_probability", "Dropout Probability", "Probability for dropping text encoder conditioning", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_time_entry(content_widget, self.ui_state, "text_encoder.stop_training_after", "text_encoder.stop_training_after_unit", "Stop Training After", "When to stop training the text encoder", default_unit="epochs", time_units=[("Epochs","epochs"),("Steps","steps")]),r,0,1,2); r+=1 # original supports_time_units=False
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "text_encoder.learning_rate", "Text Encoder LR", "LR for text encoder. Overrides base LR.", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "text_encoder_layer_skip", "Clip Skip", "Number of additional clip layers to skip. 0 = model default", value_type=int),r,0,1,2);
+        grid.setColumnStretch(1,1)
+
+    def __create_text_encoder_n_frame(self, column: QFrame, row_idx_in_col_layout: int, i: int, supports_include: bool = False, supports_layer_skip: bool = True):
+        grid = self._add_frame_to_column(column, f"Text Encoder {i}")
+        content_widget = column
+        r=0; suffix = f"_{i}" if i > 1 else "" # Assuming key_paths are like "text_encoder_2.train"
+        
+        if supports_include:
+            grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, f"text_encoder{suffix}.include", f"Include Text Encoder {i}", f"Includes text encoder {i} in the training run"),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, f"text_encoder{suffix}.train", f"Train Text Encoder {i}", f"Enables training the text encoder {i} model"),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, f"text_encoder{suffix}.train_embedding", f"Train Text Encoder {i} Embedding", f"Enables training embeddings for text encoder {i}"),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, f"text_encoder{suffix}.dropout_probability", "Dropout Probability", f"Probability for dropping text encoder {i} conditioning", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_time_entry(content_widget, self.ui_state, f"text_encoder{suffix}.stop_training_after",f"text_encoder{suffix}.stop_training_after_unit", "Stop Training After", f"When to stop training text encoder {i}", default_unit="epochs", time_units=[("Epochs","epochs"),("Steps","steps")]),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, f"text_encoder{suffix}.learning_rate", f"Text Encoder {i} LR", f"LR for text encoder {i}. Overrides base LR.", value_type=float),r,0,1,2); r+=1
+        if supports_layer_skip:
+            grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, f"text_encoder{suffix}_layer_skip", f"Text Encoder {i} Clip Skip", "Number of additional clip layers to skip. 0 = model default", value_type=int),r,0,1,2)
+        grid.setColumnStretch(1,1)
+        
+    def __create_embedding_frame(self, column: QFrame, row_idx_in_col_layout: int):
+        grid = self._add_frame_to_column(column, "Embeddings")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "embedding_learning_rate", "Embeddings LR", "LR for embeddings. Overrides base LR.", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "preserve_embedding_norm", "Preserve Embedding Norm", "Rescales each trained embedding to the median embedding norm"),r,0,1,2)
+        grid.setColumnStretch(1,1)
+
+    def __create_unet_frame(self, column: QFrame, row_idx_in_col_layout: int):
+        grid = self._add_frame_to_column(column, "UNet")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "unet.train", "Train UNet", "Enables training the UNet model"),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_time_entry(content_widget, self.ui_state, "unet.stop_training_after","unet.stop_training_after_unit", "Stop Training After", "When to stop training the UNet", default_unit="epochs", time_units=[("Epochs","epochs"),("Steps","steps")]),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "unet.learning_rate", "UNet LR", "LR for UNet. Overrides base LR.", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "rescale_noise_scheduler_to_zero_terminal_snr", "Rescale Noise Scheduler to Zero Terminal SNR", "Rescales noise scheduler to zero terminal SNR and switches to v-prediction target"),r,0,1,2)
+        grid.setColumnStretch(1,1)
+
+    def __create_prior_frame(self, column: QFrame, row_idx_in_col_layout: int):
+        grid = self._add_frame_to_column(column, "Prior / Transformer")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "prior.train", "Train Prior/Transformer", "Enables training the Prior/Transformer model"),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_time_entry(content_widget, self.ui_state, "prior.stop_training_after","prior.stop_training_after_unit", "Stop Training After", "When to stop training the Prior/Transformer", default_unit="epochs", time_units=[("Epochs","epochs"),("Steps","steps")]),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "prior.learning_rate", "Prior/Transformer LR", "LR for Prior/Transformer. Overrides base LR.", value_type=float),r,0,1,2)
+        grid.setColumnStretch(1,1)
+
+    def __create_transformer_frame(self, column: QFrame, row_idx_in_col_layout: int, supports_guidance_scale: bool = False):
+        grid = self._add_frame_to_column(column, "Transformer")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "prior.train", "Train Transformer", "Enables training the Transformer model"),r,0,1,2); r+=1 # Uses prior.train key
+        grid.addWidget(qt_comps.create_time_entry(content_widget, self.ui_state, "prior.stop_training_after","prior.stop_training_after_unit", "Stop Training After", "When to stop training the Transformer", default_unit="epochs", time_units=[("Epochs","epochs"),("Steps","steps")]),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "prior.learning_rate", "Transformer LR", "LR for Transformer. Overrides base LR.", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "prior.attention_mask", "Force Attention Mask", "Force enables passing text embedding attention mask to transformer."),r,0,1,2); r+=1
+        if supports_guidance_scale:
+            grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "prior.guidance_scale", "Guidance Scale", "Guidance scale for guidance distilled models.", value_type=float),r,0,1,2)
+        grid.setColumnStretch(1,1)
+        
+    def __create_noise_frame(self, column: QFrame, row_idx_in_col_layout: int):
+        grid = self._add_frame_to_column(column, "Noise & Timesteps")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "offset_noise_weight", "Offset Noise Weight", "Weight of offset noise", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "perturbation_noise_weight", "Perturbation Noise Weight", "Weight of perturbation noise", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_label(content_widget, "Timestep Distribution", "Selects function to sample timesteps"),r,0)
+        grid.addWidget(self._create_options_adv_ui_element(content_widget, "timestep_distribution",[(str(x),x) for x in list(TimestepDistribution)],adv_command=self.__open_timestep_distribution_window),r,1); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "min_noising_strength", "Min Noising Strength", "Minimum noising strength", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "max_noising_strength", "Max Noising Strength", "Maximum noising strength", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "noising_weight", "Noising Weight (Gamma)", "Weight parameter of timestep distribution", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "noising_bias", "Noising Bias", "Bias parameter of timestep distribution", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "timestep_shift", "Timestep Shift", "Shift timestep distribution", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "dynamic_timestep_shifting", "Dynamic Timestep Shifting", "Dynamically shift timestep distribution based on resolution."),r,0,1,2)
+        grid.setColumnStretch(1,1)
+
+    def __create_masked_frame(self, column: QFrame, row_idx_in_col_layout: int):
+        grid = self._add_frame_to_column(column, "Masked Training")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "masked_training", "Masked Training", "Masks training samples to focus on certain parts."),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "unmasked_probability", "Unmasked Probability", "Number of training steps on unmasked samples", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "unmasked_weight", "Unmasked Weight", "Loss weight of areas outside masked region", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_switch(content_widget, self.ui_state, "normalize_masked_area_loss", "Normalize Masked Area Loss", "Normalizes loss based on masked region size"),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "masked_prior_preservation_weight", "Masked Prior Preservation Weight", "Preserves regions outside mask using original model output. For LoRA.", value_type=float),r,0,1,2)
+        grid.setColumnStretch(1,1)
+
+    def __create_loss_frame(self, column: QFrame, row_idx_in_col_layout: int, supports_vb_loss: bool = False):
+        grid = self._add_frame_to_column(column, "Loss Settings")
+        content_widget = column
+        r=0
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "mse_strength", "MSE Strength", "Mean Squared Error strength", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "mae_strength", "MAE Strength", "Mean Absolute Error strength", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "log_cosh_strength", "log-cosh Strength", "Log-Hyperbolic Cosine Error strength", value_type=float),r,0,1,2); r+=1
+        if supports_vb_loss:
+            grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "vb_loss_strength", "VB Strength", "Variational lower-bound strength. 1 for variational diffusion models.", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "loss_weight_fn",[(str(x),x) for x in list(LossWeight)], "Loss Weight Function", "Choice of loss weight function."),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_entry(content_widget, self.ui_state, "loss_weight_strength", "Gamma (Loss Weight Strength)", "Inverse strength of loss weighting. Range: 1-20 (Min SNR, P2).", value_type=float),r,0,1,2); r+=1
+        grid.addWidget(qt_comps.create_options_kv(content_widget, self.ui_state, "loss_scaler", [(str(x),x) for x in list(LossScaler)], "Loss Scaler", "Type of loss scaling: Loss * selection"),r,0,1,2)
+        grid.setColumnStretch(1,1)
+        
+    # --- UI Setup methods based on model type (calling the frame creation methods) ---
     def __setup_stable_diffusion_ui(self, column_0, column_1, column_2):
         self.__create_base_frame(column_0, 0)
         self.__create_text_encoder_frame(column_0, 1)
         self.__create_embedding_frame(column_0, 2)
-
         self.__create_base2_frame(column_1, 0)
         self.__create_unet_frame(column_1, 1)
         self.__create_noise_frame(column_1, 2)
-
-        self.__create_masked_frame(column_2, 1)
+        self.__create_masked_frame(column_2, 1) # Note: Original had this at row 1 in column 2
         self.__create_loss_frame(column_2, 2)
 
     def __setup_stable_diffusion_3_ui(self, column_0, column_1, column_2):
@@ -95,11 +360,9 @@ class TrainingTab:
         self.__create_text_encoder_n_frame(column_0, 2, i=2, supports_include=True)
         self.__create_text_encoder_n_frame(column_0, 3, i=3, supports_include=True)
         self.__create_embedding_frame(column_0, 4)
-
         self.__create_base2_frame(column_1, 0)
         self.__create_transformer_frame(column_1, 1)
         self.__create_noise_frame(column_1, 2)
-
         self.__create_masked_frame(column_2, 1)
         self.__create_loss_frame(column_2, 2)
 
@@ -108,11 +371,9 @@ class TrainingTab:
         self.__create_text_encoder_n_frame(column_0, 1, i=1)
         self.__create_text_encoder_n_frame(column_0, 2, i=2)
         self.__create_embedding_frame(column_0, 3)
-
         self.__create_base2_frame(column_1, 0)
         self.__create_unet_frame(column_1, 1)
         self.__create_noise_frame(column_1, 2)
-
         self.__create_masked_frame(column_2, 1)
         self.__create_loss_frame(column_2, 2)
 
@@ -120,23 +381,19 @@ class TrainingTab:
         self.__create_base_frame(column_0, 0)
         self.__create_text_encoder_frame(column_0, 1)
         self.__create_embedding_frame(column_0, 2)
-
         self.__create_base2_frame(column_1, 0)
-        self.__create_prior_frame(column_1, 1)
+        self.__create_prior_frame(column_1, 1) # Wuerstchen uses prior_frame
         self.__create_noise_frame(column_1, 2)
-
-        self.__create_masked_frame(column_2, 0)
+        self.__create_masked_frame(column_2, 0) # Original had this at row 0
         self.__create_loss_frame(column_2, 1)
 
     def __setup_pixart_alpha_ui(self, column_0, column_1, column_2):
         self.__create_base_frame(column_0, 0)
         self.__create_text_encoder_frame(column_0, 1)
         self.__create_embedding_frame(column_0, 2)
-
         self.__create_base2_frame(column_1, 0)
-        self.__create_prior_frame(column_1, 1)
+        self.__create_prior_frame(column_1, 1) # Pixart uses prior_frame
         self.__create_noise_frame(column_1, 2)
-
         self.__create_masked_frame(column_2, 1)
         self.__create_loss_frame(column_2, 2, supports_vb_loss=True)
 
@@ -144,12 +401,10 @@ class TrainingTab:
         self.__create_base_frame(column_0, 0)
         self.__create_text_encoder_n_frame(column_0, 1, i=1, supports_include=True)
         self.__create_text_encoder_n_frame(column_0, 2, i=2, supports_include=True)
-        self.__create_embedding_frame(column_0, 4)
-
+        self.__create_embedding_frame(column_0, 4) # Original was 3, but TE frames take 3 slots
         self.__create_base2_frame(column_1, 0)
         self.__create_transformer_frame(column_1, 1, supports_guidance_scale=True)
         self.__create_noise_frame(column_1, 2)
-
         self.__create_masked_frame(column_2, 1)
         self.__create_loss_frame(column_2, 2)
 
@@ -157,11 +412,9 @@ class TrainingTab:
         self.__create_base_frame(column_0, 0)
         self.__create_text_encoder_frame(column_0, 1)
         self.__create_embedding_frame(column_0, 2)
-
         self.__create_base2_frame(column_1, 0)
-        self.__create_prior_frame(column_1, 1)
+        self.__create_prior_frame(column_1, 1) # Sana uses prior_frame
         self.__create_noise_frame(column_1, 2)
-
         self.__create_masked_frame(column_2, 1)
         self.__create_loss_frame(column_2, 2)
 
@@ -169,12 +422,10 @@ class TrainingTab:
         self.__create_base_frame(column_0, 0)
         self.__create_text_encoder_n_frame(column_0, 1, i=1, supports_include=True)
         self.__create_text_encoder_n_frame(column_0, 2, i=2, supports_include=True)
-        self.__create_embedding_frame(column_0, 4)
-
+        self.__create_embedding_frame(column_0, 4) # Adjusted index
         self.__create_base2_frame(column_1, 0, video_training_enabled=True)
         self.__create_transformer_frame(column_1, 1, supports_guidance_scale=True)
         self.__create_noise_frame(column_1, 2)
-
         self.__create_masked_frame(column_2, 1)
         self.__create_loss_frame(column_2, 2)
 
@@ -184,502 +435,50 @@ class TrainingTab:
         self.__create_text_encoder_n_frame(column_0, 2, i=2, supports_include=True)
         self.__create_text_encoder_n_frame(column_0, 3, i=3, supports_include=True)
         self.__create_text_encoder_n_frame(column_0, 4, i=4, supports_include=True, supports_layer_skip=False)
-        self.__create_embedding_frame(column_0, 5)
-
+        self.__create_embedding_frame(column_0, 5) # Adjusted index
         self.__create_base2_frame(column_1, 0, video_training_enabled=True)
         self.__create_transformer_frame(column_1, 1)
         self.__create_noise_frame(column_1, 2)
-
         self.__create_masked_frame(column_2, 1)
         self.__create_loss_frame(column_2, 2)
 
-    def __create_base_frame(self, master, row):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # optimizer
-        components.label(frame, 0, 0, "Optimizer",
-                         tooltip="The type of optimizer")
-        components.options_adv(frame, 0, 1, [str(x) for x in list(Optimizer)], self.ui_state, "optimizer.optimizer",
-                               command=self.__restore_optimizer_config, adv_command=self.__open_optimizer_params_window)
-
-        # learning rate scheduler
-        # Wackiness will ensue when reloading configs if we don't check and clear this first.
-        if hasattr(self, "lr_scheduler_comp"):
-            delattr(self, "lr_scheduler_comp")
-            delattr(self, "lr_scheduler_adv_comp")
-        components.label(frame, 1, 0, "Learning Rate Scheduler",
-                         tooltip="Learning rate scheduler that automatically changes the learning rate during training")
-        _, d = components.options_adv(frame, 1, 1, [str(x) for x in list(LearningRateScheduler)], self.ui_state,
-                                      "learning_rate_scheduler", command=self.__restore_scheduler_config,
-                                      adv_command=self.__open_scheduler_params_window)
-        self.lr_scheduler_comp = d['component']
-        self.lr_scheduler_adv_comp = d['button_component']
-        # Initial call requires the presence of self.lr_scheduler_adv_comp.
-        self.__restore_scheduler_config(self.ui_state.get_var("learning_rate_scheduler").get())
-
-        # learning rate
-        components.label(frame, 2, 0, "Learning Rate",
-                         tooltip="The base learning rate")
-        components.entry(frame, 2, 1, self.ui_state, "learning_rate")
-
-        # learning rate warmup steps
-        components.label(frame, 3, 0, "Learning Rate Warmup Steps",
-                         tooltip="The number of steps it takes to gradually increase the learning rate from 0 to the specified learning rate. Values >1 are interpeted as a fixed number of steps, values <=1 are intepreted as a percentage of the total training steps (ex. 0.2 = 20% of the total step count)")
-        components.entry(frame, 3, 1, self.ui_state, "learning_rate_warmup_steps")
-
-        # learning rate min factor
-        components.label(frame, 4, 0, "Learning Rate Min Factor",
-                         tooltip="Unit = float. Method = percentage. For a factor of 0.1, the final LR will be 10% of the initial LR. If the initial LR is 1e-4, the final LR will be 1e-5.")
-        components.entry(frame, 4, 1, self.ui_state, "learning_rate_min_factor")
-
-        # learning rate cycles
-        components.label(frame, 5, 0, "Learning Rate Cycles",
-                         tooltip="The number of learning rate cycles. This is only applicable if the learning rate scheduler supports cycles")
-        components.entry(frame, 5, 1, self.ui_state, "learning_rate_cycles")
-
-        # epochs
-        components.label(frame, 6, 0, "Epochs",
-                         tooltip="The number of epochs for a full training run")
-        components.entry(frame, 6, 1, self.ui_state, "epochs")
-
-        # batch size
-        components.label(frame, 7, 0, "Batch Size",
-                         tooltip="The batch size of one training step")
-        components.entry(frame, 7, 1, self.ui_state, "batch_size")
-
-        # accumulation steps
-        components.label(frame, 8, 0, "Accumulation Steps",
-                         tooltip="Number of accumulation steps. Increase this number to trade batch size for training speed")
-        components.entry(frame, 8, 1, self.ui_state, "gradient_accumulation_steps")
-
-        # Learning Rate Scaler
-        components.label(frame, 9, 0, "Learning Rate Scaler",
-                         tooltip="Selects the type of learning rate scaling to use during training. Functionally equated as: LR * SQRT(selection)")
-        components.options(frame, 9, 1, [str(x) for x in list(LearningRateScaler)], self.ui_state,
-                           "learning_rate_scaler")
-
-        # clip grad norm
-        components.label(frame, 10, 0, "Clip Grad Norm",
-                         tooltip="Clips the gradient norm. Leave empty to disable gradient clipping.")
-        components.entry(frame, 10, 1, self.ui_state, "clip_grad_norm")
-
-    def __create_base2_frame(self, master, row, video_training_enabled: bool = False):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-        row = 0
-
-        # ema
-        components.label(frame, row, 0, "EMA",
-                         tooltip="EMA averages the training progress over many steps, better preserving different concepts in big datasets")
-        components.options(frame, row, 1, [str(x) for x in list(EMAMode)], self.ui_state, "ema")
-        row += 1
-
-        # ema decay
-        components.label(frame, row, 0, "EMA Decay",
-                         tooltip="Decay parameter of the EMA model. Higher numbers will average more steps. For datasets of hundreds or thousands of images, set this to 0.9999. For smaller datasets, set it to 0.999 or even 0.998")
-        components.entry(frame, row, 1, self.ui_state, "ema_decay")
-        row += 1
-
-        # ema update step interval
-        components.label(frame, row, 0, "EMA Update Step Interval",
-                         tooltip="Number of steps between EMA update steps")
-        components.entry(frame, row, 1, self.ui_state, "ema_update_step_interval")
-        row += 1
-
-        # gradient checkpointing
-        components.label(frame, row, 0, "Gradient checkpointing",
-                         tooltip="Enables gradient checkpointing. This reduces memory usage, but increases training time")
-        components.options_adv(frame, row, 1, [str(x) for x in list(GradientCheckpointingMethod)], self.ui_state,
-                           "gradient_checkpointing", adv_command=self.__open_offloading_window)
-        row += 1
-
-        # gradient checkpointing layer offloading
-        components.label(frame, row, 0, "Layer offload fraction",
-                         tooltip="Enables offloading of individual layers during training to reduce VRAM usage. Increases training time and uses more RAM. Only available if checkpointing is set to CPU_OFFLOADED. values between 0 and 1, 0=disabled")
-        components.entry(frame, row, 1, self.ui_state, "layer_offload_fraction")
-        row += 1
-
-        # train dtype
-        components.label(frame, row, 0, "Train Data Type",
-                         tooltip="The mixed precision data type used for training. This can increase training speed, but reduces precision")
-        components.options_kv(frame, row, 1, [
-            ("float32", DataType.FLOAT_32),
-            ("float16", DataType.FLOAT_16),
-            ("bfloat16", DataType.BFLOAT_16),
-            ("tfloat32", DataType.TFLOAT_32),
-        ], self.ui_state, "train_dtype")
-        row += 1
-
-        # fallback train dtype
-        components.label(frame, row, 0, "Fallback Train Data Type",
-                         tooltip="The mixed precision data type used for training stages that don't support float16 data types. This can increase training speed, but reduces precision")
-        components.options_kv(frame, row, 1, [
-            ("float32", DataType.FLOAT_32),
-            ("bfloat16", DataType.BFLOAT_16),
-        ], self.ui_state, "fallback_train_dtype")
-        row += 1
-
-        # autocast cache
-        components.label(frame, row, 0, "Autocast Cache",
-                         tooltip="Enables the autocast cache. Disabling this reduces memory usage, but increases training time")
-        components.switch(frame, row, 1, self.ui_state, "enable_autocast_cache")
-        row += 1
-
-        # resolution
-        components.label(frame, row, 0, "Resolution",
-                         tooltip="The resolution used for training. Optionally specify multiple resolutions separated by a comma, or a single exact resolution in the format <width>x<height>")
-        components.entry(frame, row, 1, self.ui_state, "resolution")
-        row += 1
-
-        # frames
-        if video_training_enabled:
-            components.label(frame, row, 0, "Frames",
-                             tooltip="The number of frames used for training.")
-            components.entry(frame, row, 1, self.ui_state, "frames")
-            row += 1
-
-        # force circular padding
-        components.label(frame, row, 0, "Force Circular Padding",
-                         tooltip="Enables circular padding for all conv layers to better train seamless images")
-        components.switch(frame, row, 1, self.ui_state, "force_circular_padding")
-
-    def __create_text_encoder_frame(self, master, row):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # train text encoder
-        components.label(frame, 0, 0, "Train Text Encoder",
-                         tooltip="Enables training the text encoder model")
-        components.switch(frame, 0, 1, self.ui_state, "text_encoder.train")
-
-        # dropout
-        components.label(frame, 1, 0, "Dropout Probability",
-                         tooltip="The Probability for dropping the text encoder conditioning")
-        components.entry(frame, 1, 1, self.ui_state, "text_encoder.dropout_probability")
-
-        # train text encoder epochs
-        components.label(frame, 2, 0, "Stop Training After",
-                         tooltip="When to stop training the text encoder")
-        components.time_entry(frame, 2, 1, self.ui_state, "text_encoder.stop_training_after",
-                              "text_encoder.stop_training_after_unit", supports_time_units=False)
-
-        # text encoder learning rate
-        components.label(frame, 3, 0, "Text Encoder Learning Rate",
-                         tooltip="The learning rate of the text encoder. Overrides the base learning rate")
-        components.entry(frame, 3, 1, self.ui_state, "text_encoder.learning_rate")
-
-        # text encoder layer skip (clip skip)
-        components.label(frame, 4, 0, "Clip Skip",
-                         tooltip="The number of additional clip layers to skip. 0 = the model default")
-        components.entry(frame, 4, 1, self.ui_state, "text_encoder_layer_skip")
-
-    def __create_text_encoder_n_frame(
-            self,
-            master,
-            row: int,
-            i: int,
-            supports_include: bool = False,
-            supports_layer_skip: bool = True,
-    ):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-        row = 0
-
-        suffix = f"_{i}" if i > 1 else ""
-
-        if supports_include:
-            # include text encoder
-            components.label(frame, row, 0, f"Include Text Encoder {i}",
-                             tooltip=f"Includes text encoder {i} in the training run")
-            components.switch(frame, row, 1, self.ui_state, f"text_encoder{suffix}.include")
-            row += 1
-
-        # train text encoder
-        components.label(frame, row, 0, f"Train Text Encoder {i}",
-                         tooltip=f"Enables training the text encoder {i} model")
-        components.switch(frame, row, 1, self.ui_state, f"text_encoder{suffix}.train")
-        row += 1
-
-        # train text encoder embedding
-        components.label(frame, row, 0, f"Train Text Encoder {i} Embedding",
-                         tooltip=f"Enables training embeddings for the text encoder {i} model")
-        components.switch(frame, row, 1, self.ui_state, f"text_encoder{suffix}.train_embedding")
-        row += 1
-
-        # dropout
-        components.label(frame, row, 0, "Dropout Probability",
-                         tooltip=f"The Probability for dropping the text encoder {i} conditioning")
-        components.entry(frame, row, 1, self.ui_state, f"text_encoder{suffix}.dropout_probability")
-        row += 1
-
-        # train text encoder epochs
-        components.label(frame, row, 0, "Stop Training After",
-                         tooltip=f"When to stop training the text encoder {i}")
-        components.time_entry(frame, row, 1, self.ui_state, f"text_encoder{suffix}.stop_training_after",
-                              f"text_encoder{suffix}.stop_training_after_unit", supports_time_units=False)
-        row += 1
-
-        # text encoder learning rate
-        components.label(frame, row, 0, f"Text Encoder {i} Learning Rate",
-                         tooltip=f"The learning rate of the text encoder {i}. Overrides the base learning rate")
-        components.entry(frame, row, 1, self.ui_state, f"text_encoder{suffix}.learning_rate")
-        row += 1
-
-        if supports_layer_skip:
-            # text encoder layer skip (clip skip)
-            components.label(frame, row, 0, f"Text Encoder {i} Clip Skip",
-                             tooltip="The number of additional clip layers to skip. 0 = the model default")
-            components.entry(frame, row, 1, self.ui_state, f"text_encoder{suffix}_layer_skip")
-            row += 1
-
-    def __create_embedding_frame(self, master, row):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-
-        # embedding learning rate
-        components.label(frame, 0, 0, "Embeddings Learning Rate",
-                         tooltip="The learning rate of embeddings. Overrides the base learning rate")
-        components.entry(frame, 0, 1, self.ui_state, "embedding_learning_rate")
-
-        # preserve embedding norm
-        components.label(frame, 1, 0, "Preserve Embedding Norm",
-                         tooltip="Rescales each trained embedding to the median embedding norm")
-        components.switch(frame, 1, 1, self.ui_state, "preserve_embedding_norm")
-
-    def __create_unet_frame(self, master, row):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # train unet
-        components.label(frame, 0, 0, "Train UNet",
-                         tooltip="Enables training the UNet model")
-        components.switch(frame, 0, 1, self.ui_state, "unet.train")
-
-        # train unet epochs
-        components.label(frame, 1, 0, "Stop Training After",
-                         tooltip="When to stop training the UNet")
-        components.time_entry(frame, 1, 1, self.ui_state, "unet.stop_training_after", "unet.stop_training_after_unit",
-                              supports_time_units=False)
-
-        # unet learning rate
-        components.label(frame, 2, 0, "UNet Learning Rate",
-                         tooltip="The learning rate of the UNet. Overrides the base learning rate")
-        components.entry(frame, 2, 1, self.ui_state, "unet.learning_rate")
-
-        # rescale noise scheduler to zero terminal SNR
-        components.label(frame, 3, 0, "Rescale Noise Scheduler",
-                         tooltip="Rescales the noise scheduler to a zero terminal signal to noise ratio and switches the model to a v-prediction target")
-        components.switch(frame, 3, 1, self.ui_state, "rescale_noise_scheduler_to_zero_terminal_snr")
-
-    def __create_prior_frame(self, master, row):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # train prior
-        components.label(frame, 0, 0, "Train Prior",
-                         tooltip="Enables training the Prior model")
-        components.switch(frame, 0, 1, self.ui_state, "prior.train")
-
-        # train prior epochs
-        components.label(frame, 1, 0, "Stop Training After",
-                         tooltip="When to stop training the Prior")
-        components.time_entry(frame, 1, 1, self.ui_state, "prior.stop_training_after", "prior.stop_training_after_unit",
-                              supports_time_units=False)
-
-        # prior learning rate
-        components.label(frame, 2, 0, "Prior Learning Rate",
-                         tooltip="The learning rate of the Prior. Overrides the base learning rate")
-        components.entry(frame, 2, 1, self.ui_state, "prior.learning_rate")
-
-    def __create_transformer_frame(self, master, row, supports_guidance_scale: bool = False):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # train transformer
-        components.label(frame, 0, 0, "Train Transformer",
-                         tooltip="Enables training the Transformer model")
-        components.switch(frame, 0, 1, self.ui_state, "prior.train")
-
-        # train transformer epochs
-        components.label(frame, 1, 0, "Stop Training After",
-                         tooltip="When to stop training the Transformer")
-        components.time_entry(frame, 1, 1, self.ui_state, "prior.stop_training_after", "prior.stop_training_after_unit",
-                              supports_time_units=False)
-
-        # transformer learning rate
-        components.label(frame, 2, 0, "Transformer Learning Rate",
-                         tooltip="The learning rate of the Transformer. Overrides the base learning rate")
-        components.entry(frame, 2, 1, self.ui_state, "prior.learning_rate")
-
-        # transformer learning rate
-        components.label(frame, 3, 0, "Force Attention Mask",
-                         tooltip="Force enables passing of a text embedding attention mask to the transformer. This can improve training on shorter captions.")
-        components.switch(frame, 3, 1, self.ui_state, "prior.attention_mask")
-
-        if supports_guidance_scale:
-            # guidance scale
-            components.label(frame, 4, 0, "Guidance Scale",
-                             tooltip="The guidance scale of guidance distilled models passed to the transformer during training.")
-            components.entry(frame, 4, 1, self.ui_state, "prior.guidance_scale")
-
-    def __create_noise_frame(self, master, row):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # offset noise weight
-        components.label(frame, 0, 0, "Offset Noise Weight",
-                         tooltip="The weight of offset noise added to each training step")
-        components.entry(frame, 0, 1, self.ui_state, "offset_noise_weight")
-
-        # perturbation noise weight
-        components.label(frame, 1, 0, "Perturbation Noise Weight",
-                         tooltip="The weight of perturbation noise added to each training step")
-        components.entry(frame, 1, 1, self.ui_state, "perturbation_noise_weight")
-
-        # timestep distribution
-        components.label(frame, 2, 0, "Timestep Distribution",
-                         tooltip="Selects the function to sample timesteps during training",
-                         wide_tooltip=True)
-        components.options_adv(frame, 2, 1, [str(x) for x in list(TimestepDistribution)], self.ui_state, "timestep_distribution",
-                               adv_command=self.__open_timestep_distribution_window)
-
-        # min noising strength
-        components.label(frame, 3, 0, "Min Noising Strength",
-                         tooltip="Specifies the minimum noising strength used during training. This can help to improve composition, but prevents finer details from being trained")
-        components.entry(frame, 3, 1, self.ui_state, "min_noising_strength")
-
-        # max noising strength
-        components.label(frame, 4, 0, "Max Noising Strength",
-                         tooltip="Specifies the maximum noising strength used during training. This can be useful to reduce overfitting, but also reduces the impact of training samples on the overall image composition")
-        components.entry(frame, 4, 1, self.ui_state, "max_noising_strength")
-
-        # noising weight
-        components.label(frame, 5, 0, "Noising Weight",
-                         tooltip="Controls the weight parameter of the timestep distribution function. Use the preview to see more details.")
-        components.entry(frame, 5, 1, self.ui_state, "noising_weight")
-
-        # noising bias
-        components.label(frame, 6, 0, "Noising Bias",
-                         tooltip="Controls the bias parameter of the timestep distribution function. Use the preview to see more details.")
-        components.entry(frame, 6, 1, self.ui_state, "noising_bias")
-
-        # timestep shift
-        components.label(frame, 7, 0, "Timestep Shift",
-                         tooltip="Shift the timestep distribution. Use the preview to see more details.")
-        components.entry(frame, 7, 1, self.ui_state, "timestep_shift")
-
-        # dynamic timestep shifting
-        components.label(frame, 8, 0, "Dynamic Timestep Shifting",
-                         tooltip="Dynamically shift the timestep distribution based on resolution. Use the preview to see more details.")
-        components.switch(frame, 8, 1, self.ui_state, "dynamic_timestep_shifting")
-
-
-
-    def __create_masked_frame(self, master, row):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # Masked Training
-        components.label(frame, 0, 0, "Masked Training",
-                         tooltip="Masks the training samples to let the model focus on certain parts of the image. When enabled, one mask image is loaded for each training sample.")
-        components.switch(frame, 0, 1, self.ui_state, "masked_training")
-
-        # unmasked probability
-        components.label(frame, 1, 0, "Unmasked Probability",
-                         tooltip="When masked training is enabled, specifies the number of training steps done on unmasked samples")
-        components.entry(frame, 1, 1, self.ui_state, "unmasked_probability")
-
-        # unmasked weight
-        components.label(frame, 2, 0, "Unmasked Weight",
-                         tooltip="When masked training is enabled, specifies the loss weight of areas outside the masked region")
-        components.entry(frame, 2, 1, self.ui_state, "unmasked_weight")
-
-        # normalize masked area loss
-        components.label(frame, 3, 0, "Normalize Masked Area Loss",
-                         tooltip="When masked training is enabled, normalizes the loss for each sample based on the sizes of the masked region")
-        components.switch(frame, 3, 1, self.ui_state, "normalize_masked_area_loss")
-
-        # masked prior preservation
-        components.label(frame, 4, 0, "Masked Prior Preservation Weight",
-                         tooltip="Preserves regions outside the mask using the original untrained model output as a target. Only available for LoRA training. If enabled, use a low unmasked weight.")
-        components.entry(frame, 4, 1, self.ui_state, "masked_prior_preservation_weight")
-
-    def __create_loss_frame(self, master, row, supports_vb_loss: bool = False):
-        frame = ctk.CTkFrame(master=master, corner_radius=5)
-        frame.grid(row=row, column=0, padx=5, pady=5, sticky="nsew")
-        frame.grid_columnconfigure(0, weight=1)
-
-        # MSE Strength
-        components.label(frame, 0, 0, "MSE Strength",
-                         tooltip="Mean Squared Error strength for custom loss settings. MAE + MSE Strengths generally should sum to 1.")
-        components.entry(frame, 0, 1, self.ui_state, "mse_strength")
-
-        # MAE Strength
-        components.label(frame, 1, 0, "MAE Strength",
-                         tooltip="Mean Absolute Error strength for custom loss settings. MAE + MSE Strengths generally should sum to 1.")
-        components.entry(frame, 1, 1, self.ui_state, "mae_strength")
-
-        # log-cosh Strength
-        components.label(frame, 2, 0, "log-cosh Strength",
-                         tooltip="Log - Hyperbolic cosine Error strength for custom loss settings.")
-        components.entry(frame, 2, 1, self.ui_state, "log_cosh_strength")
-
-        if supports_vb_loss:
-            # VB Strength
-            components.label(frame, 3, 0, "VB Strength",
-                             tooltip="Variational lower-bound strength for custom loss settings. Should be set to 1 for variational diffusion models")
-            components.entry(frame, 3, 1, self.ui_state, "vb_loss_strength")
-
-        # Loss Weight function
-        components.label(frame, 4, 0, "Loss Weight Function",
-                         tooltip="Choice of loss weight function. Can help the model learn details more accurately.")
-        components.options(frame, 4, 1, [str(x) for x in list(LossWeight)], self.ui_state, "loss_weight_fn")
-
-        # Loss weight strength
-        components.label(frame, 5, 0, "Gamma",
-                         tooltip="Inverse strength of loss weighting. Range: 1-20, only applies to Min SNR and P2.")
-        components.entry(frame, 5, 1, self.ui_state, "loss_weight_strength")
-
-        # Loss Scaler
-        components.label(frame, 6, 0, "Loss Scaler",
-                         tooltip="Selects the type of loss scaling to use during training. Functionally equated as: Loss * selection")
-        components.options(frame, 6, 1, [str(x) for x in list(LossScaler)], self.ui_state, "loss_scaler")
-
+    # --- Dialog Opener Stubs ---
     def __open_optimizer_params_window(self):
-        window = OptimizerParamsWindow(self.master, self.train_config, self.ui_state)
-        self.master.wait_window(window)
+        try:
+            # Assuming OptimizerParamsWindow is already refactored and imported
+            dialog = OptimizerParamsWindow(self, self.train_config, self.ui_state)
+            dialog.exec()
+        except Exception as e:
+            print(f"Error opening OptimizerParamsWindow: {e}")
+            # traceback.print_exc() # Consider if full traceback is always needed
 
     def __open_scheduler_params_window(self):
-        window = SchedulerParamsWindow(self.master, self.train_config, self.ui_state)
-        self.master.wait_window(window)
+        try:
+            dialog = SchedulerParamsWindow(self, self.train_config, self.ui_state)
+            dialog.exec()
+        except Exception as e:
+            print(f"Error opening SchedulerParamsWindow: {e}")
+            # traceback.print_exc()
 
-    def __open_timestep_distribution_window(self):
-        window = TimestepDistributionWindow(self.master, self.train_config, self.ui_state)
-        self.master.wait_window(window)
+    def __open_timestep_distribution_window(self): print("TODO: Open TimestepDistributionWindow") # Placeholder
+    def __open_offloading_window(self): print("TODO: Open OffloadingWindow") # Placeholder
 
-    def __open_offloading_window(self):
-        window = OffloadingWindow(self.master, self.train_config, self.ui_state)
-        self.master.wait_window(window)
-
+    # --- Config Restoration Callbacks ---
     def __restore_optimizer_config(self, *args):
         optimizer_config = change_optimizer(self.train_config)
-        self.ui_state.get_var("optimizer").update(optimizer_config)
+        self.ui_state.get_var("optimizer").update(optimizer_config) # Assumes UIState var is a dict-like obj
 
-    def __restore_scheduler_config(self, variable):
-        if not hasattr(self, 'lr_scheduler_adv_comp'):
+    def __restore_scheduler_config(self, variable_value_str): # variable is the string value from combobox
+        if not hasattr(self, 'lr_scheduler_adv_comp') or self.lr_scheduler_adv_comp is None:
             return
-
-        if variable == "CUSTOM":
-            self.lr_scheduler_adv_comp.configure(state="normal")
+        if variable_value_str == LearningRateScheduler.CUSTOM.value: # Compare with enum's value
+            self.lr_scheduler_adv_comp.setEnabled(True)
         else:
-            self.lr_scheduler_adv_comp.configure(state="disabled")
+            self.lr_scheduler_adv_comp.setEnabled(False)
+            
+    # Public methods that TrainUI might call
+    def refresh_ui_for_model_type(self, model_type):
+        self.refresh_ui()
+
+    def refresh_ui_for_training_method(self, training_method):
+        self.refresh_ui()

@@ -1,207 +1,254 @@
 import contextlib
-from tkinter import TclError
+import traceback # For error printing
+from typing import Dict, Any, Optional
 
-from modules.util.config.TrainConfig import TrainConfig
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QGridLayout, QScrollArea, QLabel, QLineEdit,
+    QComboBox, QPushButton, QWidget, QSizePolicy, QMessageBox
+)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
+
+import modules.util.ui.qt_components as qt_comps
+from modules.util.ui.ui_utils import get_icon_path
+from modules.util.config.TrainConfig import TrainConfig, OptimizerConfig
 from modules.util.enum.Optimizer import Optimizer
 from modules.util.optimizer_util import (
-    OPTIMIZER_DEFAULT_PARAMETERS,
+    OPTIMIZER_DEFAULT_PARAMETERS, # This is a dict
     change_optimizer,
     load_optimizer_defaults,
-    update_optimizer_config,
+    # update_optimizer_config, # Not directly used if UIState handles updates
 )
-from modules.util.ui import components
-from modules.util.ui.ui_utils import set_window_icon
-
-import customtkinter as ctk
+from modules.util.ui.UIState import UIState
 
 
-class OptimizerParamsWindow(ctk.CTkToplevel):
+class OptimizerParamsWindow(QDialog):
     def __init__(
             self,
-            parent,
+            parent_widget: QWidget, # Renamed parent
             train_config: TrainConfig,
-            ui_state,
+            main_ui_state: UIState, # This is the UIState for the main TrainConfig
             *args, **kwargs,
     ):
-        super().__init__(parent, *args, **kwargs)
+        super().__init__(parent_widget, *args, **kwargs)
 
-        self.parent = parent
-        self.train_config = train_config
-        self.ui_state = ui_state
-        self.optimizer_ui_state = ui_state.get_var("optimizer")
-        self.protocol("WM_DELETE_WINDOW", self.on_window_close)
+        self.train_config = train_config # Reference to the main TrainConfig
+        # Create a UIState specifically for the train_config.optimizer object
+        # This allows qt_components to work with paths relative to optimizer_config
+        self.optimizer_config_obj = train_config.optimizer 
+        self.optimizer_ui_state = UIState(self.optimizer_config_obj, self) 
 
-        self.title("Optimizer Settings")
-        self.geometry("800x500")
-        self.resizable(True, True)
+        self.setWindowTitle("Optimizer Settings")
+        self.setMinimumSize(800, 500)
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=0)
-        self.grid_columnconfigure(0, weight=1)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10,10,10,10)
 
-        self.frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        # Static part (Optimizer dropdown and Load Defaults button)
+        static_controls_frame = QFrame(self)
+        static_controls_layout = QGridLayout(static_controls_frame)
+        static_controls_layout.setColumnStretch(1, 1) # Allow dropdown to expand
+        static_controls_layout.setColumnStretch(4, 1) # Allow space if needed
+        self._setup_static_controls(static_controls_layout)
+        main_layout.addWidget(static_controls_frame)
 
-        self.frame.grid_columnconfigure(0, weight=0)
-        self.frame.grid_columnconfigure(1, weight=1)
-        self.frame.grid_columnconfigure(2, minsize=50)
-        self.frame.grid_columnconfigure(3, weight=0)
-        self.frame.grid_columnconfigure(4, weight=1)
+        # Scroll area for dynamic parameters
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setWidgetResizable(True)
+        main_layout.addWidget(self.scroll_area, 1) # Scroll area takes expanding space
 
-        components.button(self, 1, 0, "ok", command=self.on_window_close)
-        self.main_frame(self.frame)
+        self.dynamic_params_widget = QWidget() # Content widget for scroll area
+        self.scroll_area.setWidget(self.dynamic_params_widget)
+        self.dynamic_params_layout = QGridLayout(self.dynamic_params_widget)
+        self.dynamic_params_layout.setColumnStretch(1, 1)
+        self.dynamic_params_layout.setColumnStretch(4, 1)
+        # self.dynamic_params_layout.setAlignment(Qt.AlignmentFlag.AlignTop) # Keep items at top
 
-        self.wait_visibility()
-        self.grab_set()
-        self.focus_set()
-        self.after(200, lambda: set_window_icon(self))
+        # OK Button at the bottom
+        self.ok_button = qt_comps.create_button(self, "OK", command=self.accept)
+        ok_button_layout = QHBoxLayout()
+        ok_button_layout.addStretch(1)
+        ok_button_layout.addWidget(self.ok_button)
+        main_layout.addLayout(ok_button_layout)
+        
+        self._create_dynamic_ui_elements() # Initial population of dynamic fields
 
+        QTimer.singleShot(100, self._late_init)
+        self.setModal(True)
 
-    def main_frame(self, master):
-        # Optimizer
-        components.label(master, 0, 0, "Optimizer",
-                         tooltip="The type of optimizer")
+    def _late_init(self):
+        icon_p = get_icon_path()
+        if icon_p: self.setWindowIcon(QIcon(icon_p))
+        self.activateWindow()
+        self.raise_()
+        # Find the QComboBox for optimizer type to set focus, if needed.
+        # For now, default focus behavior is fine.
 
-        # Create the optimizer dropdown menu and set the command
-        components.options(master, 0, 1, [str(x) for x in list(Optimizer)], self.optimizer_ui_state, "optimizer",
-                           command=self.on_optimizer_change)
+    def _setup_static_controls(self, layout: QGridLayout):
+        optimizer_items = [(opt.value, opt) for opt in Optimizer] # (display_name, enum_value)
+
+        # Optimizer Dropdown
+        # The key "optimizer" within self.optimizer_config_obj (which is a TrainConfig.optimizer / OptimizerConfig)
+        layout.addWidget(qt_comps.create_options_kv(self, self.optimizer_ui_state, "optimizer", optimizer_items, "Optimizer", "The type of optimizer", on_change_command=self.on_optimizer_change), 0, 0, 1, 2)
 
         # Defaults Button
-        components.label(master, 0, 3, "Optimizer Defaults",
-                         tooltip="Load default settings for the selected optimizer")
-        components.button(self.frame, 0, 4, "Load Defaults", self.load_defaults,
-                          tooltip="Load default settings for the selected optimizer")
+        layout.addWidget(qt_comps.create_button(self, "Load Optimizer Defaults", self.load_optimizer_defaults_action, "Load default settings for the selected optimizer"), 0, 3, 1, 2)
 
-        self.create_dynamic_ui(master)
 
-    def clear_dynamic_ui(self, master):
-        with contextlib.suppress(TclError):
-            for widget in master.winfo_children():
-                grid_info = widget.grid_info()
-                if int(grid_info["row"]) >= 1:
-                    widget.destroy()
+    def _clear_dynamic_ui_elements(self):
+        while self.dynamic_params_layout.count():
+            item = self.dynamic_params_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
 
-    def create_dynamic_ui(
-            self,
-            master,
-    ):
+    def _create_dynamic_ui_elements(self):
+        self._clear_dynamic_ui_elements() # Clear previous ones
+        
+        selected_optimizer_enum_val = self.optimizer_config_obj.optimizer # Get current optimizer enum
+        
+        # Ensure selected_optimizer_enum_val is an Optimizer enum instance
+        if not isinstance(selected_optimizer_enum_val, Optimizer):
+            try: # Try to convert from string if it's a string value from UIState init
+                selected_optimizer_enum_val = Optimizer(str(selected_optimizer_enum_val))
+            except ValueError:
+                print(f"Warning: Invalid optimizer value '{selected_optimizer_enum_val}' encountered.")
+                return # Cannot proceed without a valid optimizer
 
-        # Lookup for the title and tooltip for a key
-        # @formatter:off
+        optimizer_params = OPTIMIZER_DEFAULT_PARAMETERS.get(selected_optimizer_enum_val, {})
+        
+        # KEY_DETAIL_MAP from original code
         KEY_DETAIL_MAP = {
             'adam_w_mode': {'title': 'Adam W Mode', 'tooltip': 'Whether to use weight decay correction for Adam optimizer.', 'type': 'bool'},
             'alpha': {'title': 'Alpha', 'tooltip': 'Smoothing parameter for RMSprop and others.', 'type': 'float'},
             'amsgrad': {'title': 'AMSGrad', 'tooltip': 'Whether to use the AMSGrad variant for Adam.', 'type': 'bool'},
-            'beta1': {'title': 'Beta1', 'tooltip': 'optimizer_momentum term.', 'type': 'float'},
-            'beta2': {'title': 'Beta2', 'tooltip': 'Coefficients for computing running averages of gradient.', 'type': 'float'},
+            'beta1': {'title': 'Beta1', 'tooltip': 'Momentum term (coefficient for running averages of gradient).', 'type': 'float'},
+            'beta2': {'title': 'Beta2', 'tooltip': 'Coefficient for computing running averages of gradient square.', 'type': 'float'},
             'beta3': {'title': 'Beta3', 'tooltip': 'Coefficient for computing the Prodigy stepsize.', 'type': 'float'},
-            'bias_correction': {'title': 'Bias Correction', 'tooltip': 'Whether to use bias correction in optimization algorithms like Adam.', 'type': 'bool'},
-            'block_wise': {'title': 'Block Wise', 'tooltip': 'Whether to perform block-wise model update.', 'type': 'bool'},
-            'capturable': {'title': 'Capturable', 'tooltip': 'Whether some property of the optimizer can be captured.', 'type': 'bool'},
-            'centered': {'title': 'Centered', 'tooltip': 'Whether to center the gradient before scaling. Great for stabilizing the training process.', 'type': 'bool'},
-            'clip_threshold': {'title': 'Clip Threshold', 'tooltip': 'Clipping value for gradients.', 'type': 'float'},
-            'd0': {'title': 'Initial D', 'tooltip': 'Initial D estimate for D-adaptation.', 'type': 'float'},
-            'd_coef': {'title': 'D Coefficient', 'tooltip': 'Coefficient in the expression for the estimate of d.', 'type': 'float'},
-            'dampening': {'title': 'Dampening', 'tooltip': 'Dampening for optimizer_momentum.', 'type': 'float'},
-            'decay_rate': {'title': 'Decay Rate', 'tooltip': 'Rate of decay for moment estimation.', 'type': 'float'},
-            'decouple': {'title': 'Decouple', 'tooltip': 'Use AdamW style optimizer_decoupled weight decay.', 'type': 'bool'},
-            'differentiable': {'title': 'Differentiable', 'tooltip': 'Whether the optimization function is optimizer_differentiable.', 'type': 'bool'},
-            'eps': {'title': 'EPS', 'tooltip': 'A small value to prevent division by zero.', 'type': 'float'},
-            'eps2': {'title': 'EPS 2', 'tooltip': 'A small value to prevent division by zero.', 'type': 'float'},
-            'foreach': {'title': 'ForEach', 'tooltip': 'Whether to use a foreach implementation if available. This implementation is usually faster.', 'type': 'bool'},
-            'fsdp_in_use': {'title': 'FSDP in Use', 'tooltip': 'Flag for using sharded parameters.', 'type': 'bool'},
-            'fused': {'title': 'Fused', 'tooltip': 'Whether to use a fused implementation if available. This implementation is usually faster and requires less memory.', 'type': 'bool'},
-            'fused_back_pass': {'title': 'Fused Back Pass', 'tooltip': 'Whether to fuse the back propagation pass with the optimizer step. This reduces VRAM usage, but is not compatible with gradient accumulation.', 'type': 'bool'},
-            'growth_rate': {'title': 'Growth Rate', 'tooltip': 'Limit for D estimate growth rate.', 'type': 'float'},
-            'initial_accumulator_value': {'title': 'Initial Accumulator Value', 'tooltip': 'Initial value for Adagrad optimizer.', 'type': 'float'},
-            'initial_accumulator': {'title': 'Initial Accumulator', 'tooltip': 'Sets the starting value for both moment estimates to ensure numerical stability and balanced adaptive updates early in training.', 'type': 'float'},
-            'is_paged': {'title': 'Is Paged', 'tooltip': 'Whether the optimizer\'s internal state should be paged to CPU.', 'type': 'bool'},
-            'log_every': {'title': 'Log Every', 'tooltip': 'Intervals at which logging should occur.', 'type': 'int'},
-            'lr_decay': {'title': 'LR Decay', 'tooltip': 'Rate at which learning rate decreases.', 'type': 'float'},
-            'max_unorm': {'title': 'Max Unorm', 'tooltip': 'Maximum value for gradient clipping by norms.', 'type': 'float'},
-            'maximize': {'title': 'Maximize', 'tooltip': 'Whether to optimizer_maximize the optimization function.', 'type': 'bool'},
+            'bias_correction': {'title': 'Bias Correction', 'tooltip': 'Whether to use bias correction (Adam).', 'type': 'bool'},
+            'block_wise': {'title': 'Block Wise', 'tooltip': '8-bit optim: block-wise updates.', 'type': 'bool'},
+            'capturable': {'title': 'Capturable', 'tooltip': 'For AdamW, Adadelta, etc. (related to CUDA graphs).', 'type': 'bool'},
+            'centered': {'title': 'Centered (RMSprop)', 'tooltip': 'If True, compute centered RMSProp, gradient is normalized by an estimation of its variance.', 'type': 'bool'},
+            'clip_threshold': {'title': 'Clip Threshold (Adafactor)', 'tooltip': 'Threshold for clipping parameter updates.', 'type': 'float'},
+            'd0': {'title': 'Initial D (Prodigy/DAdapt)', 'tooltip': 'Initial D estimate for D-adaptation.', 'type': 'float'},
+            'd_coef': {'title': 'D Coefficient (Prodigy)', 'tooltip': 'Coefficient for the estimate of d.', 'type': 'float'},
+            'dampening': {'title': 'Dampening (SGD)', 'tooltip': 'Dampening for momentum.', 'type': 'float'},
+            'decay_rate': {'title': 'Decay Rate (RMSprop)', 'tooltip': 'Decay rate for moment estimation.', 'type': 'float'},
+            'decouple': {'title': 'Decouple WD (Prodigy/DAdapt)', 'tooltip': 'Use AdamW style decoupled weight decay.', 'type': 'bool'},
+            'differentiable': {'title': 'Differentiable (Adam)', 'tooltip': 'Experimental option for Adam, makes it differentiable.', 'type': 'bool'},
+            'eps': {'title': 'Epsilon (Adam, RMSProp etc.)', 'tooltip': 'Term added to the denominator to improve numerical stability.', 'type': 'float'},
+            'eps2': {'title': 'Epsilon 2 (Lion)', 'tooltip': 'Term added to the denominator for Lion.', 'type': 'float'},
+            'foreach': {'title': 'ForEach (Various)', 'tooltip': 'Use PyTorch foreach implementation if available (faster).', 'type': 'bool'},
+            'fsdp_in_use': {'title': 'FSDP in Use (Sophia)', 'tooltip': 'Flag for using sharded parameters with FSDP.', 'type': 'bool'},
+            'fused': {'title': 'Fused (Adam, SGD)', 'tooltip': 'Use a fused implementation if available (faster, less memory).', 'type': 'bool'},
+            'fused_back_pass': {'title': 'Fused Back Pass', 'tooltip': 'Fuse back propagation with optimizer step (reduces VRAM, incompatible with grad accum).', 'type': 'bool'},
+            'growth_rate': {'title': 'Growth Rate (Prodigy/DAdapt)', 'tooltip': 'Limit for D estimate growth rate.', 'type': 'float'},
+            'initial_accumulator_value': {'title': 'Initial Accumulator (Adagrad)', 'tooltip': 'Initial value for Adagrad accumulator.', 'type': 'float'},
+            'initial_accumulator': {'title': 'Initial Accumulator (Sophia)', 'tooltip': 'Starting value for moment estimates.', 'type': 'float'},
+            'is_paged': {'title': 'Paged (8-bit optims)', 'tooltip': 'Whether optimizer state should be paged to CPU.', 'type': 'bool'},
+            'log_every': {'title': 'Log Every (DAdapt)', 'tooltip': 'Logging interval for D-Adaptation.', 'type': 'int'},
+            'lr_decay': {'title': 'LR Decay (Adagrad)', 'tooltip': 'Learning rate decay.', 'type': 'float'},
+            'maximize': {'title': 'Maximize (Various)', 'tooltip': 'Maximize the objective instead of minimizing.', 'type': 'bool'},
             'min_8bit_size': {'title': 'Min 8bit Size', 'tooltip': 'Minimum tensor size for 8-bit quantization.', 'type': 'int'},
-            'momentum': {'title': 'optimizer_momentum', 'tooltip': 'Factor to accelerate SGD in relevant direction.', 'type': 'float'},
-            'nesterov': {'title': 'Nesterov', 'tooltip': 'Whether to enable Nesterov optimizer_momentum.', 'type': 'bool'},
-            'no_prox': {'title': 'No Prox', 'tooltip': 'Whether to use proximity updates or not.', 'type': 'bool'},
-            'optim_bits': {'title': 'Optim Bits', 'tooltip': 'Number of bits used for optimization.', 'type': 'int'},
-            'percentile_clipping': {'title': 'Percentile Clipping', 'tooltip': 'Gradient clipping based on percentile values.', 'type': 'int'},
-            'relative_step': {'title': 'Relative Step', 'tooltip': 'Whether to use a relative step size.', 'type': 'bool'},
-            'safeguard_warmup': {'title': 'Safeguard Warmup', 'tooltip': 'Avoid issues during warm-up stage.', 'type': 'bool'},
-            'scale_parameter': {'title': 'Scale Parameter', 'tooltip': 'Whether to scale the parameter or not.', 'type': 'bool'},
-            'stochastic_rounding': {'title': 'Stochastic Rounding', 'tooltip': 'Stochastic rounding for weight updates. Improves quality when using bfloat16 weights.', 'type': 'bool'},
-            'use_bias_correction': {'title': 'Bias Correction', 'tooltip': 'Turn on Adam\'s bias correction.', 'type': 'bool'},
-            'use_triton': {'title': 'Use Triton', 'tooltip': 'Whether Triton optimization should be used.', 'type': 'bool'},
-            'warmup_init': {'title': 'Warmup Initialization', 'tooltip': 'Whether to warm-up the optimizer initialization.', 'type': 'bool'},
-            'weight_decay': {'title': 'Weight Decay', 'tooltip': 'Regularization to prevent overfitting.', 'type': 'float'},
-            'weight_lr_power': {'title': 'Weight LR Power', 'tooltip': 'During warmup, the weights in the average will be equal to lr raised to this power. Set to 0 for no weighting.', 'type': 'float'},
-            'decoupled_decay': {'title': 'Decoupled Decay', 'tooltip': 'If set as True, then the optimizer uses decoupled weight decay as in AdamW.', 'type': 'bool'},
-            'fixed_decay': {'title': 'Fixed Decay', 'tooltip': '(When Decoupled Decay is True:) Applies fixed weight decay when True; scales decay with learning rate when False.', 'type': 'bool'},
-            'rectify': {'title': 'Rectify', 'tooltip': 'Perform the rectified update similar to RAdam.', 'type': 'bool'},
-            'degenerated_to_sgd': {'title': 'Degenerated to SGD', 'tooltip': 'Performs SGD update when gradient variance is high.', 'type': 'bool'},
-            'k': {'title': 'K', 'tooltip': 'Number of vector projected per iteration.', 'type': 'int'},
-            'xi': {'title': 'Xi', 'tooltip': 'Term used in vector projections to avoid division by zero.', 'type': 'float'},
-            'n_sma_threshold': {'title': 'N SMA Threshold', 'tooltip': 'Number of SMA threshold.', 'type': 'int'},
-            'ams_bound': {'title': 'AMS Bound', 'tooltip': 'Whether to use the AMSBound variant.', 'type': 'bool'},
-            'r': {'title': 'R', 'tooltip': 'EMA factor.', 'type': 'float'},
-            'adanorm': {'title': 'AdaNorm', 'tooltip': 'Whether to use the AdaNorm variant', 'type': 'bool'},
-            'adam_debias': {'title': 'Adam Debias', 'tooltip': 'Only correct the denominator to avoid inflating step sizes early in training.', 'type': 'bool'},
-            'slice_p': {'title': 'Slice parameters', 'tooltip': 'Reduce memory usage by calculating LR adaptation statistics on only every pth entry of each tensor. For values greater than 1 this is an approximation to standard Prodigy. Values ~11 are reasonable.', 'type': 'int'},
-            'cautious': {'title': 'Cautious', 'tooltip': 'Whether to use the Cautious variant.', 'type': 'bool'},
-            'weight_decay_by_lr': {'title': 'weight_decay_by_lr', 'tooltip': 'Automatically adjust weight decay based on lr', 'type': 'bool'},
-            'prodigy_steps': {'title': 'prodigy_steps', 'tooltip': 'Turn off Prodigy after N steps', 'type': 'int'},
-            'use_speed': {'title': 'use_speed', 'tooltip': 'use_speed method', 'type': 'bool'},
-            'split_groups': {'title': 'split_groups', 'tooltip': 'Use split groups when training multiple params(uNet,TE..)', 'type': 'bool'},
-            'split_groups_mean': {'title': 'split_groups_mean', 'tooltip': 'Use mean for split groups', 'type': 'bool'},
-            'factored': {'title': 'factored', 'tooltip': 'Use factored', 'type': 'bool'},
-            'factored_fp32': {'title': 'factored_fp32', 'tooltip': 'Use factored_fp32', 'type': 'bool'},
-            'use_stableadamw': {'title': 'use_stableadamw', 'tooltip': 'Use use_stableadamw for gradient scaling', 'type': 'bool'},
-            'use_muon_pp': {'title': 'use_muon_pp', 'tooltip': 'Use muon_pp method', 'type': 'bool'},
-            'use_cautious': {'title': 'use_cautious', 'tooltip': 'Use cautious method', 'type': 'bool'},
-            'use_grams': {'title': 'use_grams', 'tooltip': 'Use grams method', 'type': 'bool'},
-            'use_adopt': {'title': 'use_adopt', 'tooltip': 'Use adopt method', 'type': 'bool'},
-            'use_focus': {'title': 'use_focus', 'tooltip': 'Use focus method', 'type': 'bool'},
+            'momentum': {'title': 'Momentum (SGD, RMSProp)', 'tooltip': 'Momentum factor.', 'type': 'float'},
+            'nesterov': {'title': 'Nesterov (SGD)', 'tooltip': 'Enables Nesterov momentum.', 'type': 'bool'},
+            'no_prox': {'title': 'No Prox (RMSprop)', 'tooltip': 'Whether to use proximity updates.', 'type': 'bool'},
+            'optim_bits': {'title': 'Optim Bits (8-bit optims)', 'tooltip': 'Number of bits for optimizer state (e.g., 32 or 8).', 'type': 'int'},
+            'percentile_clipping': {'title': 'Percentile Clipping (8-bit optims)', 'tooltip': 'Gradient clipping based on percentile (0-100).', 'type': 'int'},
+            'relative_step': {'title': 'Relative Step (Adafactor)', 'tooltip': 'Use relative step size.', 'type': 'bool'},
+            'safeguard_warmup': {'title': 'Safeguard Warmup (Prodigy/DAdapt)', 'tooltip': 'Avoid issues during warm-up stage.', 'type': 'bool'},
+            'scale_parameter': {'title': 'Scale Parameter (Adafactor)', 'tooltip': 'Scale learning rate by parameter norm.', 'type': 'bool'},
+            'stochastic_rounding': {'title': 'Stochastic Rounding (Sophia)', 'tooltip': 'Stochastic rounding for weight updates (improves bfloat16).', 'type': 'bool'},
+            'use_bias_correction': {'title': 'Use Bias Correction (Prodigy)', 'tooltip': 'Turn on Adam\'s bias correction.', 'type': 'bool'},
+            'use_triton': {'title': 'Use Triton', 'tooltip': 'Whether Triton optimization should be used (Sophia).', 'type': 'bool'},
+            'warmup_init': {'title': 'Warmup Init (Adafactor)', 'tooltip': 'Warm-up optimizer initialization.', 'type': 'bool'},
+            'weight_decay': {'title': 'Weight Decay', 'tooltip': 'L2 penalty to prevent overfitting.', 'type': 'float'},
+            'weight_lr_power': {'title': 'Weight LR Power (Sophia)', 'tooltip': 'Power for LR weighting during warmup (0 for no weighting).', 'type': 'float'},
+            'decoupled_decay': {'title': 'Decoupled Decay (RAdam)', 'tooltip': 'Use AdamW style decoupled weight decay.', 'type': 'bool'},
+            'fixed_decay': {'title': 'Fixed Decay (RAdam)', 'tooltip': 'Applies fixed weight decay (True) or scales with LR (False).', 'type': 'bool'},
+            'rectify': {'title': 'Rectify (RAdam)', 'tooltip': 'Perform rectified update similar to RAdam.', 'type': 'bool'},
+            'degenerated_to_sgd': {'title': 'Degenerate to SGD (RAdam)', 'tooltip': 'Performs SGD update when gradient variance is high.', 'type': 'bool'},
+            'k': {'title': 'K (AdaBound)', 'tooltip': 'Number of vector projected per iteration (AdaBound).', 'type': 'int'}, # Also Sophia
+            'xi': {'title': 'Xi (Sophia)', 'tooltip': 'Term for vector projections to avoid div by zero.', 'type': 'float'},
+            'n_sma_threshold': {'title': 'N SMA Threshold (RAdam)', 'tooltip': 'Threshold for Simple Moving Average.', 'type': 'int'},
+            'ams_bound': {'title': 'AMSBound (AdaBound)', 'tooltip': 'Use AMSBound variant.', 'type': 'bool'}, # For AdaBound
+            'r': {'title': 'R (Sophia)', 'tooltip': 'EMA factor for Sophia.', 'type': 'float'},
+            'adanorm': {'title': 'AdaNorm (AdamNorm)', 'tooltip': 'Use AdaNorm variant.', 'type': 'bool'},
+            'adam_debias': {'title': 'Adam Debias (AdamNorm)', 'tooltip': 'Correct denominator to avoid inflating step sizes early.', 'type': 'bool'},
+            'slice_p': {'title': 'Slice Parameters (Prodigy)', 'tooltip': 'Calculate LR adaptation on every p-th entry to save memory.', 'type': 'int'},
+            'cautious': {'title': 'Cautious (Sophia)', 'tooltip': 'Use Cautious variant for Sophia.', 'type': 'bool'},
+            'weight_decay_by_lr': {'title': 'Weight Decay by LR (Sophia)', 'tooltip': 'Automatically adjust weight decay based on LR.', 'type': 'bool'},
+            'prodigy_steps': {'title': 'Prodigy Steps', 'tooltip': 'Turn off Prodigy after N steps.', 'type': 'int'},
+            'use_speed': {'title': 'Use Speed (Sophia)', 'tooltip': 'Use speed method for Sophia.', 'type': 'bool'},
+            'split_groups': {'title': 'Split Groups (Sophia)', 'tooltip': 'Use split groups when training multiple params (UNet, TE).', 'type': 'bool'},
+            'split_groups_mean': {'title': 'Split Groups Mean (Sophia)', 'tooltip': 'Use mean for split groups.', 'type': 'bool'},
+            'factored': {'title': 'Factored (Adafactor)', 'tooltip': 'Use factored second moment estimates.', 'type': 'bool'},
+            'factored_fp32': {'title': 'Factored FP32 (Sophia)', 'tooltip': 'Use factored_fp32 for Sophia.', 'type': 'bool'},
+            'use_stableadamw': {'title': 'Use StableAdamW (StableAdamW)', 'tooltip': 'Use StableAdamW for gradient scaling.', 'type': 'bool'},
+            'use_muon_pp': {'title': 'Use Muon_pp (Sophia)', 'tooltip': 'Use muon_pp method for Sophia.', 'type': 'bool'},
+            'use_cautious': {'title': 'Use Cautious (Sophia, again)', 'tooltip': 'Use cautious method for Sophia.', 'type': 'bool'}, # Duplicate in map
+            'use_grams': {'title': 'Use Grams (Sophia)', 'tooltip': 'Use grams method for Sophia.', 'type': 'bool'},
+            'use_adopt': {'title': 'Use Adopt (Sophia)', 'tooltip': 'Use adopt method for Sophia.', 'type': 'bool'},
+            'use_focus': {'title': 'Use Focus (Sophia)', 'tooltip': 'Use focus method for Sophia.', 'type': 'bool'},
         }
         # @formatter:on
 
-        if not self.winfo_exists():  # check if this window isn't open
-            return
+        row_offset = 1 # Start dynamic params from row 1 in their grid
+        
+        for index, key in enumerate(optimizer_params.keys()):
+            if key == "optimizer": continue # Skip the optimizer type itself
 
-        selected_optimizer = self.train_config.optimizer.optimizer
+            param_info = KEY_DETAIL_MAP.get(key, {'title': key.replace("_", " ").title(), 'tooltip': f'Parameter: {key}', 'type': 'str'}) # Default if not in map
+            
+            title = param_info['title']
+            tooltip = param_info['tooltip']
+            param_type_str = param_info['type']
 
-        # Extract the keys for the selected optimizer
-        for index, key in enumerate(OPTIMIZER_DEFAULT_PARAMETERS[selected_optimizer].keys()):
-            arg_info = KEY_DETAIL_MAP[key]
+            # Determine actual data type for qt_comps.create_entry
+            actual_type = str
+            if param_type_str == 'float': actual_type = float
+            elif param_type_str == 'int': actual_type = int
+            # bool is handled by create_switch
 
-            title = arg_info['title']
-            tooltip = arg_info['tooltip']
-            type = arg_info['type']
-
-            row = (index // 2) + 1
-            col = 3 * (index % 2)
-
-            components.label(master, row, col, title, tooltip=tooltip)
-
-            if type != 'bool':
-                components.entry(master, row, col + 1, self.optimizer_ui_state, key,
-                                 command=self.update_user_pref)
+            current_row = row_offset + (index // 2)
+            current_col_label = 0 if (index % 2 == 0) else 3
+            current_col_widget = 1 if (index % 2 == 0) else 4
+            
+            # Use self.optimizer_ui_state and the direct key
+            if param_type_str == 'bool':
+                self.dynamic_params_layout.addWidget(qt_comps.create_switch(self.dynamic_params_widget, self.optimizer_ui_state, key, title, tooltip), current_row, current_col_label, 1, 2) # Switch spans 2 columns
             else:
-                components.switch(master, row, col + 1, self.optimizer_ui_state, key,
-                                  command=self.update_user_pref)
+                self.dynamic_params_layout.addWidget(qt_comps.create_entry(self.dynamic_params_widget, self.optimizer_ui_state, key, title, tooltip, value_type=actual_type), current_row, current_col_label, 1, 2)
+        
+        self.dynamic_params_layout.setRowStretch(self.dynamic_params_layout.rowCount(), 1)
 
-    def update_user_pref(self, *args):
-        update_optimizer_config(self.train_config)
 
-    def on_optimizer_change(self, *args):
-        optimizer_config = change_optimizer(self.train_config)
-        self.ui_state.get_var("optimizer").update(optimizer_config)
+    def on_optimizer_change(self, optimizer_enum_val: Optimizer): # Receives the enum value
+        # This is called when the optimizer QComboBox changes.
+        # The value in self.optimizer_config_obj.optimizer is already updated by qt_comps helper.
+        
+        # Update the rest of the optimizer config to defaults for the NEW optimizer
+        # change_optimizer updates self.train_config.optimizer based on its current .optimizer type
+        # Here, self.optimizer_config_obj IS self.train_config.optimizer
+        change_optimizer(self.train_config) 
+        
+        # Notify the UIState for the optimizer that its underlying object's content has changed significantly
+        # This should make track_variable callbacks fire for all changed fields.
+        self.optimizer_ui_state.update_target_object(self.optimizer_config_obj)
+        
+        self._create_dynamic_ui_elements() # Rebuild dynamic part of UI
 
-        self.clear_dynamic_ui(self.frame)
-        self.create_dynamic_ui(self.frame)
+    def load_optimizer_defaults_action(self):
+        # load_optimizer_defaults updates self.train_config.optimizer
+        load_optimizer_defaults(self.train_config)
+        
+        # Notify UIState and rebuild UI
+        self.optimizer_ui_state.update_target_object(self.optimizer_config_obj)
+        self._create_dynamic_ui_elements()
 
-    def load_defaults(self, *args):
-        optimizer_config = load_optimizer_defaults(self.train_config)
-        self.ui_state.get_var("optimizer").update(optimizer_config)
+    def done(self, result: int):
+        # No explicit save needed here if UIState binding is correct, as
+        # self.train_config.optimizer has been updated live.
+        super().done(result)
 
-    def on_window_close(self):
-        self.destroy()
+[end of modules/ui/OptimizerParamsWindow.py]

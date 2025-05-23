@@ -1,25 +1,30 @@
 import random
+import traceback # For error printing
 
-from modules.modelSetup.mixin.ModelSetupNoiseMixin import (
-    ModelSetupNoiseMixin,
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QGridLayout, QWidget, QPushButton, QScrollArea,
+    QSizePolicy
 )
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon, QPalette
+
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+import matplotlib.pyplot as plt # Keep for plt.subplots() if used that way
+
+from modules.modelSetup.mixin.ModelSetupNoiseMixin import ModelSetupNoiseMixin
 from modules.util.config.TrainConfig import TrainConfig
 from modules.util.enum.TimestepDistribution import TimestepDistribution
-from modules.util.ui import components
-from modules.util.ui.ui_utils import set_window_icon
+import modules.util.ui.qt_components as qt_comps
+from modules.util.ui.ui_utils import get_icon_path
 from modules.util.ui.UIState import UIState
 
 import torch
 from torch import Tensor
 
-import customtkinter as ctk
-from customtkinter import AppearanceModeTracker, ThemeManager
-from matplotlib import pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-
 
 class TimestepGenerator(ModelSetupNoiseMixin):
-
+    # This class is non-UI and its logic should remain the same.
     def __init__(
             self,
             timestep_distribution: TimestepDistribution,
@@ -33,7 +38,6 @@ class TimestepGenerator(ModelSetupNoiseMixin):
             latent_height: int,
     ):
         super().__init__()
-
         self.timestep_distribution = timestep_distribution
         self.min_noising_strength = min_noising_strength
         self.max_noising_strength = max_noising_strength
@@ -46,155 +50,179 @@ class TimestepGenerator(ModelSetupNoiseMixin):
 
     def generate(self) -> Tensor:
         generator = torch.Generator()
-        generator.seed()
+        generator.seed() # Use a new random seed each time for representative distribution
 
-        config = TrainConfig.default_values()
-        config.timestep_distribution = self.timestep_distribution
-        config.min_noising_strength = self.min_noising_strength
-        config.max_noising_strength = self.max_noising_strength
-        config.noising_weight = self.noising_weight
-        config.noising_bias = self.noising_bias
-        config.timestep_shift = self.timestep_shift
-        config.dynamic_timestep_shifting = self.dynamic_timestep_shifting
-
-
+        # Create a temporary config for generation based on current UI settings
+        # This assumes the main config passed to the window is the one being modified by UIState
+        temp_config_for_generation = TrainConfig() # Create a blank or default one
+        temp_config_for_generation.timestep_distribution = self.timestep_distribution
+        temp_config_for_generation.min_noising_strength = self.min_noising_strength
+        temp_config_for_generation.max_noising_strength = self.max_noising_strength
+        temp_config_for_generation.noising_weight = self.noising_weight
+        temp_config_for_generation.noising_bias = self.noising_bias
+        temp_config_for_generation.timestep_shift = self.timestep_shift
+        temp_config_for_generation.dynamic_timestep_shifting = self.dynamic_timestep_shifting
+        
         return self._get_timestep_discrete(
-            num_train_timesteps=1000,
+            num_train_timesteps=1000, # Standard number of timesteps for preview
             deterministic=False,
             generator=generator,
-            batch_size=1000000,
-            config=config,
+            batch_size=100000, # Generate a large batch for a good histogram
+            config=temp_config_for_generation, # Use the temp config
             latent_width=self.latent_width,
             latent_height=self.latent_height,
         )
 
 
-class TimestepDistributionWindow(ctk.CTkToplevel):
+class TimestepDistributionWindow(QDialog):
     def __init__(
             self,
-            parent,
-            config: TrainConfig,
-            ui_state: UIState,
+            parent_widget: QWidget, # parent is QWidget
+            config: TrainConfig,    # Main TrainConfig from TrainingTab/TrainUI
+            ui_state: UIState,      # UIState for the main TrainConfig
             *args, **kwargs,
     ):
-        super().__init__(parent, *args, **kwargs)
+        super().__init__(parent_widget, *args, **kwargs)
 
-        self.title("Timestep Distribution")
-        self.geometry("900x600")
-        self.resizable(True, True)
+        self.setWindowTitle("Timestep Distribution Preview")
+        self.setMinimumSize(900, 650) # Adjusted for potentially larger plot labels
 
-        self.config = config
-        self.ui_state = ui_state
-        self.image_preview_file_index = 0
+        self.config = config # This is train_config
+        self.ui_state = ui_state # This is main_ui_state for train_config
+
         self.ax = None
         self.canvas = None
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(0, weight=1)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10,10,10,10)
 
-        frame = self.__content_frame(self)
-        frame.grid(row=0, column=0, sticky='nsew')
-        components.button(self, 1, 0, "ok", self.__ok)
+        # UI Elements Frame (Scrollable)
+        scroll_area = QScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        
+        content_widget = QWidget()
+        scroll_area.setWidget(content_widget)
+        
+        controls_and_plot_layout = QHBoxLayout(content_widget) # Horizontal: Controls | Plot
 
-        self.wait_visibility()
-        self.after(200, lambda: set_window_icon(self))
-        self.grab_set()
-        self.focus_set()
+        # Left side: Controls
+        controls_container = QWidget()
+        controls_layout = QGridLayout(controls_container)
+        controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._setup_controls(controls_container, controls_layout) # Pass container for qt_comps parent
+        controls_and_plot_layout.addWidget(controls_container, 1) # Stretch factor 1 for controls side
 
-    def __content_frame(self, master):
-        frame = ctk.CTkScrollableFrame(master, fg_color="transparent")
-        frame.grid_columnconfigure(0, weight=0)
-        frame.grid_columnconfigure(1, weight=0)
-        frame.grid_columnconfigure(2, weight=0)
-        frame.grid_columnconfigure(3, weight=1)
-        frame.grid_rowconfigure(7, weight=1)
+        # Right side: Plot
+        plot_container = QWidget()
+        plot_layout = QVBoxLayout(plot_container) # Use QVBoxLayout for the canvas
+        self._setup_plot_area(plot_container, plot_layout)
+        controls_and_plot_layout.addWidget(plot_container, 2) # Stretch factor 2 for plot side
+        
+        main_layout.addWidget(scroll_area, 1) # Scroll area takes most space
 
-        # timestep distribution
-        components.label(frame, 0, 0, "Timestep Distribution",
-                         tooltip="Selects the function to sample timesteps during training",
-                         wide_tooltip=True)
-        components.options(frame, 0, 1, [str(x) for x in list(TimestepDistribution)], self.ui_state,
-                           "timestep_distribution")
+        # Bottom Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+        self.update_preview_button = qt_comps.create_button(self, "Update Preview", command=self.__update_preview)
+        button_layout.addWidget(self.update_preview_button)
+        self.ok_button = qt_comps.create_button(self, "OK", command=self.accept)
+        button_layout.addWidget(self.ok_button)
+        main_layout.addLayout(button_layout)
 
-        # min noising strength
-        components.label(frame, 1, 0, "Min Noising Strength",
-                         tooltip="Specifies the minimum noising strength used during training. This can help to improve composition, but prevents finer details from being trained")
-        components.entry(frame, 1, 1, self.ui_state, "min_noising_strength")
+        QTimer.singleShot(100, self._late_init)
+        self.setModal(True)
+        self.__update_preview() # Initial plot
 
-        # max noising strength
-        components.label(frame, 2, 0, "Max Noising Strength",
-                         tooltip="Specifies the maximum noising strength used during training. This can be useful to reduce overfitting, but also reduces the impact of training samples on the overall image composition")
-        components.entry(frame, 2, 1, self.ui_state, "max_noising_strength")
-
-        # noising weight
-        components.label(frame, 3, 0, "Noising Weight",
-                         tooltip="Controls the weight parameter of the timestep distribution function. Use the preview to see more details.")
-        components.entry(frame, 3, 1, self.ui_state, "noising_weight")
-
-        # noising bias
-        components.label(frame, 4, 0, "Noising Bias",
-                         tooltip="Controls the bias parameter of the timestep distribution function. Use the preview to see more details.")
-        components.entry(frame, 4, 1, self.ui_state, "noising_bias")
-
-        # timestep shift
-        components.label(frame, 5, 0, "Timestep Shift",
-                         tooltip="Shift the timestep distribution. Use the preview to see more details.")
-        components.entry(frame, 5, 1, self.ui_state, "timestep_shift")
-
-        # dynamic timestep shifting
-        components.label(frame, 6, 0, "Dynamic Timestep Shifting",
-                         tooltip="Dynamically shift the timestep distribution based on resolution. For the preview, a random resolution between 512 and 1024 is used, assuming a VAE scale factor of 8. During training, the actual resolution.")
-        components.switch(frame, 6, 1, self.ui_state, "dynamic_timestep_shifting")
+    def _late_init(self):
+        icon_p = get_icon_path()
+        if icon_p: self.setWindowIcon(QIcon(icon_p))
+        self.activateWindow()
+        self.raise_()
+        self.update_preview_button.setFocus()
 
 
-        # plot
-        appearance_mode = AppearanceModeTracker.get_mode()
-        background_color = self.winfo_rgb(ThemeManager.theme["CTkToplevel"]["fg_color"][appearance_mode])
-        text_color = self.winfo_rgb(ThemeManager.theme["CTkLabel"]["text_color"][appearance_mode])
-        background_color = f"#{int(background_color[0]/256):x}{int(background_color[1]/256):x}{int(background_color[2]/256):x}"
-        text_color = f"#{int(text_color[0]/256):x}{int(text_color[1]/256):x}{int(text_color[2]/256):x}"
+    def _setup_controls(self, parent_for_helpers: QWidget, layout: QGridLayout):
+        row = 0
+        # Key paths are relative to self.config (TrainConfig) which is managed by self.ui_state
+        layout.addWidget(qt_comps.create_options_kv(parent_for_helpers, self.ui_state, "timestep_distribution", [(str(x), x) for x in list(TimestepDistribution)], "Timestep Distribution", "Selects the function to sample timesteps during training"), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(parent_for_helpers, self.ui_state, "min_noising_strength", "Min Noising Strength", "Specifies the minimum noising strength...", value_type=float), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(parent_for_helpers, self.ui_state, "max_noising_strength", "Max Noising Strength", "Specifies the maximum noising strength...", value_type=float), row, 0, 1, 2); row+=1
+        layout.addWidget(qt_comps.create_entry(parent_for_helpers, self.ui_state, "noising_weight", "Noising Weight (Gamma)", "Controls the weight parameter of the timestep distribution function."), row, 0, 1, 2, value_type=float); row+=1
+        layout.addWidget(qt_comps.create_entry(parent_for_helpers, self.ui_state, "noising_bias", "Noising Bias", "Controls the bias parameter of the timestep distribution function."), row, 0, 1, 2, value_type=float); row+=1
+        layout.addWidget(qt_comps.create_entry(parent_for_helpers, self.ui_state, "timestep_shift", "Timestep Shift", "Shift the timestep distribution."), row, 0, 1, 2, value_type=float); row+=1
+        layout.addWidget(qt_comps.create_switch(parent_for_helpers, self.ui_state, "dynamic_timestep_shifting", "Dynamic Timestep Shifting", "Dynamically shift based on resolution. Preview uses random 512-1024 (VAE scale 8)."), row, 0, 1, 2); row+=1
+        layout.setRowStretch(row, 1) # Push controls to top of their column
 
-        fig, ax = plt.subplots()
-        self.ax = ax
-        self.canvas = FigureCanvasTkAgg(fig, master=frame)
-        self.canvas.get_tk_widget().grid(row=0, column=3, rowspan=8)
 
-        fig.set_facecolor(background_color)
-        ax.set_facecolor(background_color)
-        ax.spines['bottom'].set_color(text_color)
-        ax.spines['left'].set_color(text_color)
-        ax.spines['top'].set_color(text_color)
-        ax.spines['right'].set_color(text_color)
-        ax.tick_params(axis='x', colors=text_color, which="both")
-        ax.tick_params(axis='y', colors=text_color, which="both")
-        ax.xaxis.label.set_color(text_color)
-        ax.yaxis.label.set_color(text_color)
+    def _setup_plot_area(self, parent_container: QWidget, layout: QVBoxLayout):
+        # Determine theme colors for plot
+        palette = QApplication.instance().palette()
+        bg_color_q = palette.color(QPalette.ColorRole.Window)
+        text_color_q = palette.color(QPalette.ColorRole.WindowText)
 
-        self.__update_preview()
+        bg_color_hex = bg_color_q.name()
+        text_color_hex = text_color_q.name()
 
-        # update button
-        components.button(frame, 8, 3, "Update Preview", command=self.__update_preview)
+        self.fig = Figure(figsize=(6, 5), dpi=100) # Adjust size as needed
+        self.fig.set_facecolor(bg_color_hex)
+        
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor(bg_color_hex)
+        self.ax.spines['bottom'].set_color(text_color_hex)
+        self.ax.spines['left'].set_color(text_color_hex)
+        self.ax.spines['top'].set_color(text_color_hex)
+        self.ax.spines['right'].set_color(text_color_hex)
+        self.ax.tick_params(axis='x', colors=text_color_hex, which="both")
+        self.ax.tick_params(axis='y', colors=text_color_hex, which="both")
+        self.ax.xaxis.label.set_color(text_color_hex)
+        self.ax.yaxis.label.set_color(text_color_hex)
+        self.ax.title.set_color(text_color_hex)
 
-        frame.pack(fill="both", expand=1)
-        return frame
+
+        self.canvas = FigureCanvasQTAgg(self.fig)
+        layout.addWidget(self.canvas)
 
     def __update_preview(self):
+        if not self.ax or not self.canvas:
+            return
+            
+        # Values are taken directly from self.config, which should be updated by UIState
         resolution = random.randint(512, 1024)
-        generator = TimestepGenerator(
-            timestep_distribution=self.config.timestep_distribution,
-            min_noising_strength=self.config.min_noising_strength,
-            max_noising_strength=self.config.max_noising_strength,
-            noising_weight=self.config.noising_weight,
-            noising_bias=self.config.noising_bias,
-            timestep_shift=self.config.timestep_shift,
-            dynamic_timestep_shifting=self.config.dynamic_timestep_shifting,
-            latent_width=resolution // 8,
-            latent_height=resolution // 8,
-        )
+        try:
+            generator = TimestepGenerator(
+                timestep_distribution=self.config.timestep_distribution,
+                min_noising_strength=self.config.min_noising_strength,
+                max_noising_strength=self.config.max_noising_strength,
+                noising_weight=self.config.noising_weight,
+                noising_bias=self.config.noising_bias,
+                timestep_shift=self.config.timestep_shift,
+                dynamic_timestep_shifting=self.config.dynamic_timestep_shifting,
+                latent_width=resolution // 8,
+                latent_height=resolution // 8,
+            )
+            data_to_plot = generator.generate()
+            self.ax.cla() # Clear previous plot
+            self.ax.hist(data_to_plot.numpy(), bins=100, range=(0, 999)) # .numpy() if it's a torch tensor
+            self.ax.set_title("Timestep Distribution Preview", color=self.ax.title.get_color())
+            self.ax.set_xlabel("Timestep", color=self.ax.xaxis.label.get_color())
+            self.ax.set_ylabel("Frequency", color=self.ax.yaxis.label.get_color())
+            self.canvas.draw()
+        except Exception as e:
+            print(f"Error updating timestep distribution preview: {e}")
+            traceback.print_exc()
+            if self.ax and self.canvas:
+                self.ax.cla()
+                self.ax.text(0.5, 0.5, "Error generating preview", horizontalalignment='center', verticalalignment='center', color='red')
+                self.canvas.draw()
 
-        self.ax.cla()
-        self.ax.hist(generator.generate(), bins=1000, range=(0, 999))
-        self.canvas.draw()
+    # def __ok(self): # Original method, now handled by self.accept()
+    #     self.destroy()
 
-    def __ok(self):
-        self.destroy()
+    def done(self, result: int):
+        # Clean up Matplotlib figure if necessary, though QDialog closing should handle canvas
+        if self.fig:
+            plt.close(self.fig) # Important to close the figure to free memory
+        super().done(result)
+
+[end of modules/ui/TimestepDistributionWindow.py]
