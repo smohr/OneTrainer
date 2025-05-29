@@ -1035,6 +1035,27 @@ def create_optimizer(
                 eps=optimizer_config.eps if optimizer_config.eps is not None else 1e-3,
             )
 
+        # Automagic Optimizer
+        case Optimizer.AUTOMAGIC:
+            from modules.util.optimizer.automagic import Automagic
+            optimizer = Automagic(
+                params=parameters,
+                lr=config.learning_rate,
+                min_lr=optimizer_config.min_lr if optimizer_config.min_lr is not None else 1e-7,
+                max_lr=optimizer_config.max_lr if optimizer_config.max_lr is not None else 1e-3,
+                lr_bump=optimizer_config.lr_bump if optimizer_config.lr_bump is not None else 1e-3,
+                eps=(optimizer_config.eps if optimizer_config.eps is not None else 1e-30, 
+                    optimizer_config.eps2 if optimizer_config.eps2 is not None else 1e-3),
+                clip_threshold=optimizer_config.clip_threshold if optimizer_config.clip_threshold is not None else 1.0,
+                beta2=optimizer_config.beta2 if optimizer_config.beta2 is not None else 0.999,
+                weight_decay=optimizer_config.weight_decay if optimizer_config.weight_decay is not None else 0.0,
+                do_paramiter_swapping=optimizer_config.do_paramiter_swapping if optimizer_config.do_paramiter_swapping is not None else False,
+                paramiter_swapping_factor=optimizer_config.paramiter_swapping_factor if optimizer_config.paramiter_swapping_factor is not None else 0.1,
+
+
+            )
+
+
     if state_dict is not None and optimizer is not None:
         if 'param_group_mapping' not in state_dict:
             # Old method of loading the optimizer state. This only works if the param groups did not change.

@@ -564,6 +564,16 @@ class GenericTrainer(BaseTrainer):
         if self.config.optimizer.optimizer.is_schedule_free:
             torch.clear_autocast_cache()
             self.model.optimizer.eval()
+    
+    def __get_automagic_lrs(self,optimizer):
+        lrs = []
+        for group in optimizer.param_groups:
+            for p in group['params']:
+                state = optimizer.state[p]
+                lr = optimizer._get_lr(group, state)
+                lrs.append(lr)
+        lrs = torch.stack(lrs)
+        return lrs, lrs.mean()
 
     def train(self):
         train_device = torch.device(self.config.train_device)
@@ -745,7 +755,10 @@ class GenericTrainer(BaseTrainer):
                                 self.parameters,
                                 update_step
                             )
-
+                        if self.model.optimizer.__class__.__name__ == 'Automagic':
+                            lrs, avg_lr = self.__get_automagic_lrs(self.model.optimizer)
+                            self.tensorboard.add_histogram(f'train/automagic_lrs', lrs, train_progress.global_step)
+                            self.tensorboard.add_scalar(f'train/automagic_avg_lr', avg_lr, train_progress.global_step)
                         self.one_step_trained = True
 
                 if self.config.validation:

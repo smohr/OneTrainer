@@ -161,6 +161,12 @@ class OptimizerParamsWindow(ctk.CTkToplevel):
             'use_grams': {'title': 'use_grams', 'tooltip': 'Use grams method', 'type': 'bool'},
             'use_adopt': {'title': 'use_adopt', 'tooltip': 'Use adopt method', 'type': 'bool'},
             'use_focus': {'title': 'use_focus', 'tooltip': 'Use focus method', 'type': 'bool'},
+            'min_lr': {'title': 'min_lr', 'tooltip': 'Minium LR', 'type': 'float'},
+            'max_lr': {'title': 'max_lr', 'tooltip': 'Maximum LR', 'type': 'float'},
+            'lr_bump': {'title': 'lr_bump', 'tooltip': 'LR Bump', 'type': 'float'},
+            'do_paramiter_swapping': {'title': 'do_paramiter_swapping', 'tooltip': 'Enable parameter swapping', 'type': 'bool'},
+            'paramiter_swapping_factor': {'title': 'paramiter_swapping_factor', 'tooltip': 'Parameter Swapping Factor', 'type': 'float'},
+
         }
         # @formatter:on
 
