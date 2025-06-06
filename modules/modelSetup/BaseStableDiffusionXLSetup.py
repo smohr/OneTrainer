@@ -280,6 +280,7 @@ class BaseStableDiffusionXLSetup(
                     'timestep': timestep,
                     'predicted': predicted_latent_noise,
                     'target': latent_noise,
+                    'scaled_latent_image': scaled_latent_image,
                 }
             elif model.noise_scheduler.config.prediction_type == 'v_prediction':
                 target_velocity = model.noise_scheduler.get_velocity(scaled_latent_image, latent_noise, timestep)
@@ -288,6 +289,7 @@ class BaseStableDiffusionXLSetup(
                     'timestep': timestep,
                     'predicted': predicted_latent_noise,
                     'target': target_velocity,
+                    'scaled_latent_image': scaled_latent_image,
                 }
 
             if config.debug_mode:

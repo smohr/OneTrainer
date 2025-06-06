@@ -11,7 +11,7 @@ from modules.util.loss.vb_loss import vb_losses
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-
+from pytorch_wavelets import DWTForward
 
 class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
     __coefficients: DiffusionScheduleCoefficients | None
@@ -23,6 +23,7 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
         self.__coefficients = None
         self.__alphas_cumprod_fun = None
         self.__sigmas = None
+        self.__dwt = None
 
     def __log_cosh_loss(
             self,
@@ -31,6 +32,65 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
     ) -> Tensor:
         diff = pred - target
         loss = diff + torch.nn.functional.softplus(-2.0*diff) - torch.log(torch.full(size=diff.size(), fill_value=2.0, dtype=torch.float32, device=diff.device))
+        return loss
+
+    def __wlf_loss(self, pred: Tensor, target: Tensor, data: dict) -> Tensor:
+        """
+        Wavelet-based Latent Fine-tuning (WLF) loss implementation.
+        
+        This implements the WLF method from the Diffusion-4K paper:
+        "Ultra-High-Resolution Image Synthesis: Data, Method and Evaluation"
+        https://arxiv.org/abs/2506.01331
+        
+        This method enhances fine detail preservation by applying wavelet decomposition
+        to the loss function, helping to maintain texture and sharpness.
+        """
+
+        if self.__dwt is None:
+            self.__dwt = DWTForward(J=1, mode='zero', wave='haar').to(pred.device)
+
+        is_video = pred.ndim == 5
+
+        if is_video:
+            n, c, t, h, w = pred.shape
+            pred = pred.permute(0, 2, 1, 3, 4).reshape(n * t, c, h, w)
+            target = target.permute(0, 2, 1, 3, 4).reshape(n * t, c, h, w)
+
+        # Get the clean latent image for the paper's formula
+        clean_latent = data['scaled_latent_image']
+        
+        # Paper's formula: ||f(v_Θ(z_t, t) - ε) - f(x₀)||²
+        # where v_Θ(z_t, t) = pred (predicted velocity)
+        # ε = target (noise/velocity target)
+        # x₀ = clean_latent (clean ground truth)
+        
+        # Apply DWT to (pred - target) and clean_latent
+        pred_minus_target = pred - target
+        
+        if is_video:
+            clean_latent = clean_latent.permute(0, 2, 1, 3, 4).reshape(n * t, clean_latent.shape[1], h, w)
+        
+        # Use float32 for DWT operations as pytorch_wavelets expects float32
+        pred_minus_target = pred_minus_target.to(dtype=torch.float32)
+        clean_latent = clean_latent.to(dtype=torch.float32)
+        
+        # DWT of (pred - target)
+        pred_minus_target_ll, pred_minus_target_h = self.__dwt(pred_minus_target)
+        pred_minus_target_lh, pred_minus_target_hl, pred_minus_target_hh = torch.unbind(pred_minus_target_h[0], dim=2)
+        pred_minus_target_dwt = torch.cat([pred_minus_target_ll, pred_minus_target_lh, pred_minus_target_hl, pred_minus_target_hh], dim=1)
+
+        # DWT of clean image
+        clean_ll, clean_h = self.__dwt(clean_latent)
+        clean_lh, clean_hl, clean_hh = torch.unbind(clean_h[0], dim=2)
+        clean_dwt = torch.cat([clean_ll, clean_lh, clean_hl, clean_hh], dim=1)
+
+        # Paper's formula: ||f(v_Θ(z_t, t) - ε) - f(x₀)||²
+        loss = F.mse_loss(pred_minus_target_dwt, clean_dwt, reduction='none')
+
+        if is_video:
+            _, new_c, new_h, new_w = loss.shape
+            loss = loss.view(n, t, new_c, new_h, new_w).permute(0, 2, 1, 3, 4)
+
         return loss
 
     def __masked_losses(
@@ -98,6 +158,25 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
                 masked_prior_preservation_weight=config.masked_prior_preservation_weight,
             ).mean(mean_dim) * config.log_cosh_strength
 
+        # WLF Loss
+        if config.wlf_strength != 0:
+            losses += masked_losses_with_prior(
+                losses=self.__wlf_loss(
+                    data['predicted'].to(dtype=torch.float32),
+                    data['target'].to(dtype=torch.float32),
+                    data
+                ),
+                prior_losses=self.__wlf_loss(
+                    data['predicted'].to(dtype=torch.float32),
+                    data['prior_target'].to(dtype=torch.float32),
+                    data
+                ) if 'prior_target' in data else None,
+                mask=batch['latent_mask'].to(dtype=torch.float32),
+                unmasked_weight=config.unmasked_weight,
+                normalize_masked_area_loss=config.normalize_masked_area_loss,
+                masked_prior_preservation_weight=config.masked_prior_preservation_weight,
+            ).mean(mean_dim) * config.wlf_strength
+
         # VB loss
         if config.vb_loss_strength != 0 and 'predicted_var_values' in data and self.__coefficients is not None:
             losses += masked_losses(
@@ -148,6 +227,14 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
                     data['predicted'].to(dtype=torch.float32),
                     data['target'].to(dtype=torch.float32)
                 ).mean(mean_dim) * config.log_cosh_strength
+
+        # WLF Loss
+        if config.wlf_strength != 0:
+            losses += self.__wlf_loss(
+                data['predicted'].to(dtype=torch.float32),
+                data['target'].to(dtype=torch.float32),
+                data
+            ).mean(mean_dim) * config.wlf_strength
 
         # VB loss
         if config.vb_loss_strength != 0 and 'predicted_var_values' in data:

@@ -310,6 +310,7 @@ class BaseFluxSetup(
                 'timestep': timestep,
                 'predicted': predicted_flow,
                 'target': flow,
+                'scaled_latent_image': scaled_latent_image,
             }
 
             if config.debug_mode:

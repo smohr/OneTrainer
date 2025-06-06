@@ -269,6 +269,7 @@ class BaseWuerstchenSetup(
                 'prediction_type': 'epsilon',  # the DDPMWuerstchenScheduler only supports eps prediction
                 'target': latent_noise,
                 'timestep': timestep,
+                'scaled_latent_image': scaled_latent_image,
             }
 
             if config.debug_mode:

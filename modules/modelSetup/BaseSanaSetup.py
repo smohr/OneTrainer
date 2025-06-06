@@ -229,6 +229,7 @@ class BaseSanaSetup(
                 'timestep': timestep,
                 'predicted': predicted_flow,
                 'target': flow,
+                'scaled_latent_image': scaled_latent_image,
             }
 
             if self.debug_mode:

@@ -326,6 +326,7 @@ class TrainConfig(BaseConfig):
     mse_strength: float
     mae_strength: float
     log_cosh_strength: float
+    wlf_strength: float
     vb_loss_strength: float
     loss_weight_fn: LossWeight
     loss_weight_strength: float
@@ -824,6 +825,7 @@ class TrainConfig(BaseConfig):
         data.append(("mse_strength", 1.0, float, False))
         data.append(("mae_strength", 0.0, float, False))
         data.append(("log_cosh_strength", 0.0, float, False))
+        data.append(("wlf_strength", 0.0, float, False))
         data.append(("vb_loss_strength", 1.0, float, False))
         data.append(("loss_weight_fn", LossWeight.CONSTANT, LossWeight, False))
         data.append(("loss_weight_strength", 5.0, float, False))
