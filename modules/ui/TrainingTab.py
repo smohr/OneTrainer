@@ -645,6 +645,11 @@ class TrainingTab:
                              tooltip="Variational lower-bound strength for custom loss settings. Should be set to 1 for variational diffusion models")
             components.entry(frame, 3, 1, self.ui_state, "vb_loss_strength")
 
+        # DWT Loss Strength
+        components.label(frame, 3, 0, "DWT Loss Strength",
+                         tooltip="Sets the influence of the Discrete Wavelet Transform (DWT) loss, which helps preserve texture and sharpness. Use as a supplement to MSE/MAE to prevent blurry results. A small value (e.g., 0.1) is often effective.")
+        components.entry(frame, 3, 1, self.ui_state, "dwt_strength")
+
         # Loss Weight function
         components.label(frame, 4, 0, "Loss Weight Function",
                          tooltip="Choice of loss weight function. Can help the model learn details more accurately.")

@@ -11,7 +11,7 @@ from modules.util.loss.vb_loss import vb_losses
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-
+from pytorch_wavelets import DWTForward
 
 class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
     __coefficients: DiffusionScheduleCoefficients | None
@@ -23,6 +23,7 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
         self.__coefficients = None
         self.__alphas_cumprod_fun = None
         self.__sigmas = None
+        self.__dwt = None
 
     def __log_cosh_loss(
             self,
@@ -32,6 +33,33 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
         diff = pred - target
         loss = diff + torch.nn.functional.softplus(-2.0*diff) - torch.log(torch.full(size=diff.size(), fill_value=2.0, dtype=torch.float32, device=diff.device))
         return loss
+
+    def __dwt_loss(self, pred: Tensor, target: Tensor) -> Tensor:
+            if self.__dwt is None:
+                self.__dwt = DWTForward(J=1, mode='zero', wave='haar').to(pred.device)
+
+            is_video = pred.ndim == 5
+
+            if is_video:
+                n, c, t, h, w = pred.shape
+                pred = pred.permute(0, 2, 1, 3, 4).reshape(n * t, c, h, w)
+                target = target.permute(0, 2, 1, 3, 4).reshape(n * t, c, h, w)
+
+            pred_ll, pred_h = self.__dwt(pred)
+            pred_lh, pred_hl, pred_hh = torch.unbind(pred_h[0], dim=2)
+            pred_dwt = torch.cat([pred_ll, pred_lh, pred_hl, pred_hh], dim=1)
+
+            target_ll, target_h = self.__dwt(target)
+            target_lh, target_hl, target_hh = torch.unbind(target_h[0], dim=2)
+            target_dwt = torch.cat([target_ll, target_lh, target_hl, target_hh], dim=1)
+
+            loss = F.mse_loss(pred_dwt, target_dwt, reduction='none')
+
+            if is_video:
+                _, new_c, new_h, new_w = loss.shape
+                loss = loss.view(n, t, new_c, new_h, new_w).permute(0, 2, 1, 3, 4)
+
+            return loss
 
     def __masked_losses(
             self,
@@ -98,6 +126,23 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
                 masked_prior_preservation_weight=config.masked_prior_preservation_weight,
             ).mean(mean_dim) * config.log_cosh_strength
 
+        # DWT Loss
+        if config.dwt_strength != 0:
+            losses += masked_losses_with_prior(
+                losses=self.__dwt_loss(
+                    data['predicted'].to(dtype=torch.float32),
+                    data['target'].to(dtype=torch.float32)
+                ),
+                prior_losses=self.__dwt_loss(
+                    data['predicted'].to(dtype=torch.float32),
+                    data['prior_target'].to(dtype=torch.float32)
+                ) if 'prior_target' in data else None,
+                mask=batch['latent_mask'].to(dtype=torch.float32),
+                unmasked_weight=config.unmasked_weight,
+                normalize_masked_area_loss=config.normalize_masked_area_loss,
+                masked_prior_preservation_weight=config.masked_prior_preservation_weight,
+            ).mean(mean_dim) * config.dwt_strength
+
         # VB loss
         if config.vb_loss_strength != 0 and 'predicted_var_values' in data and self.__coefficients is not None:
             losses += masked_losses(
@@ -148,6 +193,13 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
                     data['predicted'].to(dtype=torch.float32),
                     data['target'].to(dtype=torch.float32)
                 ).mean(mean_dim) * config.log_cosh_strength
+
+        # DWT Loss
+        if config.dwt_strength != 0:
+            losses += self.__dwt_loss(
+                data['predicted'].to(dtype=torch.float32),
+                data['target'].to(dtype=torch.float32)
+            ).mean(mean_dim) * config.dwt_strength
 
         # VB loss
         if config.vb_loss_strength != 0 and 'predicted_var_values' in data:
