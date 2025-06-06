@@ -17,6 +17,7 @@ accelerate==1.3.0
 safetensors==0.5.2
 tensorboard==2.18.0
 pytorch-lightning==2.5.0.post0
+pytorch-wavelets==1.3.0
 
 # diffusion models
 -e git+https://github.com/huggingface/diffusers.git@5873377#egg=diffusers
