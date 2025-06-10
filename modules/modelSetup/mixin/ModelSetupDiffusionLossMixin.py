@@ -296,7 +296,7 @@ class ModelSetupDiffusionLossMixin(metaclass=ABCMeta):
 
         if self.__sigmas is None and sigmas is not None:
             num_timesteps = sigmas.shape[0]
-            all_timesteps = torch.arange(start=1, end=num_timesteps + 1, step=1, dtype=torch.int32, device=sigmas.device)
+            all_timesteps = torch.arange(start=0, end=num_timesteps, step=1, dtype=torch.int32, device=sigmas.device)
             self.__sigmas = all_timesteps / num_timesteps
 
         if data['loss_type'] == 'target':
