@@ -107,6 +107,11 @@ class TrainOptimizerConfig(BaseConfig):
     use_grams: False
     use_adopt: False
     use_focus: False
+    min_lr: float
+    max_lr: float
+    lr_bump: float
+    do_parameter_swapping: False
+    parameter_swapping_factor: float
 
     def __init__(self, data: list[(str, Any, type, bool)]):
         super().__init__(data)
@@ -149,6 +154,11 @@ class TrainOptimizerConfig(BaseConfig):
         data.append(("max_unorm", None, float, True))
         data.append(("maximize", False, bool, False))
         data.append(("min_8bit_size", None, int, True))
+        data.append(("min_lr", None, float, True))
+        data.append(("max_lr", None, float, True))
+        data.append(("lr_bump", None, float, True))        
+        data.append(("do_paramiter_swapping", None, bool, False))        
+        data.append(("paramiter_swapping_factor", None, float, True))        
         data.append(("momentum", None, float, True))
         data.append(("nesterov", False, bool, False))
         data.append(("no_prox", False, bool, False))
