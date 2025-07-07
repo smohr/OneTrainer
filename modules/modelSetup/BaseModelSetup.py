@@ -214,3 +214,12 @@ class BaseModelSetup(
         finally:
             for adapter in model.adapters():
                 adapter.hook_to_module()
+
+    @staticmethod
+    def make_alphas_cumprod_fun(alphas_cumprod_tensor):
+        def fn(timesteps, dim):
+            out = alphas_cumprod_tensor.to(timesteps.device)[timesteps]
+            while out.dim() < dim:
+                out = out.unsqueeze(-1)
+            return out
+        return fn

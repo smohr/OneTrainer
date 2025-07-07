@@ -328,10 +328,14 @@ class BasePixArtAlphaSetup(
             data: dict,
             config: TrainConfig,
     ) -> Tensor:
+    
+        alphas_cumprod_fun = self.make_alphas_cumprod_fun(model.noise_scheduler.alphas_cumprod)
+
         return self._diffusion_losses(
             batch=batch,
             data=data,
             config=config,
             train_device=self.train_device,
             betas=model.noise_scheduler.betas.to(device=self.train_device),
+            alphas_cumprod_fun=alphas_cumprod_fun,
         ).mean()
