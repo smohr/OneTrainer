@@ -36,46 +36,55 @@ class TrainingTab:
         self.refresh_ui()
 
     def refresh_ui(self):
-        if self.scroll_frame:
-            self.scroll_frame.destroy()
+        try:
+            if self.scroll_frame:
+                # Use update_idletasks to ensure pending events are processed before destruction
+                self.master.update_idletasks()
+                self.scroll_frame.destroy()
+                self.scroll_frame = None
 
-        self.scroll_frame = ctk.CTkScrollableFrame(self.master, fg_color="transparent")
-        self.scroll_frame.grid(row=0, column=0, sticky="nsew")
+            self.scroll_frame = ctk.CTkScrollableFrame(self.master, fg_color="transparent")
+            self.scroll_frame.grid(row=0, column=0, sticky="nsew")
 
-        self.scroll_frame.grid_columnconfigure(0, weight=1)
-        self.scroll_frame.grid_columnconfigure(1, weight=1)
-        self.scroll_frame.grid_columnconfigure(2, weight=1)
+            self.scroll_frame.grid_columnconfigure(0, weight=1)
+            self.scroll_frame.grid_columnconfigure(1, weight=1)
+            self.scroll_frame.grid_columnconfigure(2, weight=1)
 
-        column_0 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
-        column_0.grid(row=0, column=0, sticky="nsew")
-        column_0.grid_columnconfigure(0, weight=1)
+            column_0 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
+            column_0.grid(row=0, column=0, sticky="nsew")
+            column_0.grid_columnconfigure(0, weight=1)
 
-        column_1 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
-        column_1.grid(row=0, column=1, sticky="nsew")
-        column_1.grid_columnconfigure(0, weight=1)
+            column_1 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
+            column_1.grid(row=0, column=1, sticky="nsew")
+            column_1.grid_columnconfigure(0, weight=1)
 
-        column_2 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
-        column_2.grid(row=0, column=2, sticky="nsew")
-        column_2.grid_columnconfigure(0, weight=1)
+            column_2 = ctk.CTkFrame(master=self.scroll_frame, corner_radius=0, fg_color="transparent")
+            column_2.grid(row=0, column=2, sticky="nsew")
+            column_2.grid_columnconfigure(0, weight=1)
 
-        if self.train_config.model_type.is_stable_diffusion():
-            self.__setup_stable_diffusion_ui(column_0, column_1, column_2)
-        if self.train_config.model_type.is_stable_diffusion_3():
-            self.__setup_stable_diffusion_3_ui(column_0, column_1, column_2)
-        elif self.train_config.model_type.is_stable_diffusion_xl():
-            self.__setup_stable_diffusion_xl_ui(column_0, column_1, column_2)
-        elif self.train_config.model_type.is_wuerstchen():
-            self.__setup_wuerstchen_ui(column_0, column_1, column_2)
-        elif self.train_config.model_type.is_pixart():
-            self.__setup_pixart_alpha_ui(column_0, column_1, column_2)
-        elif self.train_config.model_type.is_flux():
-            self.__setup_flux_ui(column_0, column_1, column_2)
-        elif self.train_config.model_type.is_sana():
-            self.__setup_sana_ui(column_0, column_1, column_2)
-        elif self.train_config.model_type.is_hunyuan_video():
-            self.__setup_hunyuan_video_ui(column_0, column_1, column_2)
-        elif self.train_config.model_type.is_hi_dream():
-            self.__setup_hi_dream_ui(column_0, column_1, column_2)
+            if self.train_config.model_type.is_stable_diffusion():
+                self.__setup_stable_diffusion_ui(column_0, column_1, column_2)
+            if self.train_config.model_type.is_stable_diffusion_3():
+                self.__setup_stable_diffusion_3_ui(column_0, column_1, column_2)
+            elif self.train_config.model_type.is_stable_diffusion_xl():
+                self.__setup_stable_diffusion_xl_ui(column_0, column_1, column_2)
+            elif self.train_config.model_type.is_wuerstchen():
+                self.__setup_wuerstchen_ui(column_0, column_1, column_2)
+            elif self.train_config.model_type.is_pixart():
+                self.__setup_pixart_alpha_ui(column_0, column_1, column_2)
+            elif self.train_config.model_type.is_flux():
+                self.__setup_flux_ui(column_0, column_1, column_2)
+            elif self.train_config.model_type.is_sana():
+                self.__setup_sana_ui(column_0, column_1, column_2)
+            elif self.train_config.model_type.is_hunyuan_video():
+                self.__setup_hunyuan_video_ui(column_0, column_1, column_2)
+            elif self.train_config.model_type.is_hi_dream():
+                self.__setup_hi_dream_ui(column_0, column_1, column_2)
+
+        except Exception as e:
+            print(f"[ERROR] TrainingTab: refresh_ui failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     def __setup_stable_diffusion_ui(self, column_0, column_1, column_2):
         self.__create_base_frame(column_0, 0)
@@ -201,23 +210,19 @@ class TrainingTab:
         # optimizer
         components.label(frame, 0, 0, "Optimizer",
                          tooltip="The type of optimizer")
+
         components.options_adv(frame, 0, 1, [str(x) for x in list(Optimizer)], self.ui_state, "optimizer.optimizer",
                                command=self.__restore_optimizer_config, adv_command=self.__open_optimizer_params_window)
 
         # learning rate scheduler
-        # Wackiness will ensue when reloading configs if we don't check and clear this first.
-        if hasattr(self, "lr_scheduler_comp"):
-            delattr(self, "lr_scheduler_comp")
-            delattr(self, "lr_scheduler_adv_comp")
         components.label(frame, 1, 0, "Learning Rate Scheduler",
                          tooltip="Learning rate scheduler that automatically changes the learning rate during training")
+
         _, d = components.options_adv(frame, 1, 1, [str(x) for x in list(LearningRateScheduler)], self.ui_state,
                                       "learning_rate_scheduler", command=self.__restore_scheduler_config,
                                       adv_command=self.__open_scheduler_params_window)
         self.lr_scheduler_comp = d['component']
         self.lr_scheduler_adv_comp = d['button_component']
-        # Initial call requires the presence of self.lr_scheduler_adv_comp.
-        self.__restore_scheduler_config(self.ui_state.get_var("learning_rate_scheduler").get())
 
         # learning rate
         components.label(frame, 2, 0, "Learning Rate",
@@ -681,10 +686,19 @@ class TrainingTab:
         self.ui_state.get_var("optimizer").update(optimizer_config)
 
     def __restore_scheduler_config(self, variable):
-        if not hasattr(self, 'lr_scheduler_adv_comp'):
+        if not hasattr(self, 'lr_scheduler_adv_comp') or self.lr_scheduler_adv_comp is None:
             return
 
-        if variable == "CUSTOM":
-            self.lr_scheduler_adv_comp.configure(state="normal")
-        else:
-            self.lr_scheduler_adv_comp.configure(state="disabled")
+        # Check if the component is still valid (not destroyed)
+        try:
+            # Try to access a property to see if the component still exists
+            _ = self.lr_scheduler_adv_comp.winfo_exists()
+
+            if variable == "CUSTOM":
+                self.lr_scheduler_adv_comp.configure(state="normal")
+            else:
+                self.lr_scheduler_adv_comp.configure(state="disabled")
+        except Exception as e:
+            # Component has been destroyed during UI refresh, we silently ignore it as
+            # this is expected and harmless
+            return

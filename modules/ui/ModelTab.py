@@ -28,36 +28,44 @@ class ModelTab:
         self.refresh_ui()
 
     def refresh_ui(self):
-        if self.scroll_frame:
-            self.scroll_frame.destroy()
+        try:
+            if self.scroll_frame:
+                self.master.update_idletasks()
+                self.scroll_frame.destroy()
+                self.scroll_frame = None
 
-        self.scroll_frame = ctk.CTkScrollableFrame(self.master, fg_color="transparent")
-        self.scroll_frame.grid(row=0, column=0, sticky="nsew")
+            self.scroll_frame = ctk.CTkScrollableFrame(self.master, fg_color="transparent")
+            self.scroll_frame.grid(row=0, column=0, sticky="nsew")
 
-        self.scroll_frame.grid_columnconfigure(0, weight=0)
-        self.scroll_frame.grid_columnconfigure(1, weight=10)
-        self.scroll_frame.grid_columnconfigure(2, minsize=50)
-        self.scroll_frame.grid_columnconfigure(3, weight=0)
-        self.scroll_frame.grid_columnconfigure(4, weight=1)
+            self.scroll_frame.grid_columnconfigure(0, weight=0)
+            self.scroll_frame.grid_columnconfigure(1, weight=10)
+            self.scroll_frame.grid_columnconfigure(2, minsize=50)
+            self.scroll_frame.grid_columnconfigure(3, weight=0)
+            self.scroll_frame.grid_columnconfigure(4, weight=1)
 
-        if self.train_config.model_type.is_stable_diffusion():
-            self.__setup_stable_diffusion_ui()
-        if self.train_config.model_type.is_stable_diffusion_3():
-            self.__setup_stable_diffusion_3_ui()
-        elif self.train_config.model_type.is_stable_diffusion_xl():
-            self.__setup_stable_diffusion_xl_ui()
-        elif self.train_config.model_type.is_wuerstchen():
-            self.__setup_wuerstchen_ui()
-        elif self.train_config.model_type.is_pixart():
-            self.__setup_pixart_alpha_ui()
-        elif self.train_config.model_type.is_flux():
-            self.__setup_flux_ui()
-        elif self.train_config.model_type.is_sana():
-            self.__setup_sana_ui()
-        elif self.train_config.model_type.is_hunyuan_video():
-            self.__setup_hunyuan_video_ui()
-        elif self.train_config.model_type.is_hi_dream():
-            self.__setup_hi_dream_ui()
+            if self.train_config.model_type.is_stable_diffusion():
+                self.__setup_stable_diffusion_ui()
+            if self.train_config.model_type.is_stable_diffusion_3():
+                self.__setup_stable_diffusion_3_ui()
+            elif self.train_config.model_type.is_stable_diffusion_xl():
+                self.__setup_stable_diffusion_xl_ui()
+            elif self.train_config.model_type.is_wuerstchen():
+                self.__setup_wuerstchen_ui()
+            elif self.train_config.model_type.is_pixart():
+                self.__setup_pixart_alpha_ui()
+            elif self.train_config.model_type.is_flux():
+                self.__setup_flux_ui()
+            elif self.train_config.model_type.is_sana():
+                self.__setup_sana_ui()
+            elif self.train_config.model_type.is_hunyuan_video():
+                self.__setup_hunyuan_video_ui()
+            elif self.train_config.model_type.is_hi_dream():
+                self.__setup_hi_dream_ui()
+                
+        except Exception as e:
+            print(f"[ERROR] ModelTab: refresh_ui failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     def __setup_stable_diffusion_ui(self):
         row = 0

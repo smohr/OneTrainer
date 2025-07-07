@@ -142,8 +142,19 @@ class TopBar:
         )
 
     def __change_model_type(self, model_type: ModelType):
-        self.change_model_type_callback(model_type)
-        self.__create_training_method()
+        try:
+            # Update training method dropdown first (this is quick and safe)
+            self.__create_training_method()
+            
+            # Force update before calling the heavy callback
+            self.master.update()
+            
+            # Then call the callback which will refresh other UI components
+            self.change_model_type_callback(model_type)
+            
+        except Exception as e:
+            print(f"[ERROR] TopBar: Model type change failed: {e}")
+            traceback.print_exc()
 
     def __create_configs_dropdown(self):
         if self.configs_dropdown is not None:

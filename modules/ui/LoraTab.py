@@ -38,44 +38,53 @@ class LoraTab:
         self.refresh_ui()
 
     def refresh_ui(self):
-        if self.scroll_frame:
-            self.scroll_frame.destroy()
-        self.scroll_frame = ctk.CTkFrame(self.master, fg_color="transparent")
-        self.scroll_frame.grid(row=0, column=0, sticky="nsew")
+        try:
+            if self.scroll_frame:
+                self.master.update_idletasks()
+                self.scroll_frame.destroy()
+                self.scroll_frame = None
+            
+            self.scroll_frame = ctk.CTkFrame(self.master, fg_color="transparent")
+            self.scroll_frame.grid(row=0, column=0, sticky="nsew")
 
-        if self.train_config.model_type.is_stable_diffusion():
-            self.presets = sd_presets
-        elif self.train_config.model_type.is_stable_diffusion_xl():
-            self.presets = sdxl_presets
-        elif self.train_config.model_type.is_stable_diffusion_3():
-            self.presets = sd3_presets
-        elif self.train_config.model_type.is_wuerstchen():
-            self.presets = sc_presets
-        elif self.train_config.model_type.is_pixart():
-            self.presets = pixart_presets
-        elif self.train_config.model_type.is_flux():
-            self.presets = flux_presets
-        elif self.train_config.model_type.is_sana():
-            self.presets = sana_presets
-        elif self.train_config.model_type.is_hunyuan_video():
-            self.presets = hunyuan_video_presets
-        elif self.train_config.model_type.is_hi_dream():
-            self.presets = hidream_presets
-        else:
-            self.presets = {"full": []}
-        self.presets_list = list(self.presets.keys()) + ["custom"]
+            if self.train_config.model_type.is_stable_diffusion():
+                self.presets = sd_presets
+            elif self.train_config.model_type.is_stable_diffusion_xl():
+                self.presets = sdxl_presets
+            elif self.train_config.model_type.is_stable_diffusion_3():
+                self.presets = sd3_presets
+            elif self.train_config.model_type.is_wuerstchen():
+                self.presets = sc_presets
+            elif self.train_config.model_type.is_pixart():
+                self.presets = pixart_presets
+            elif self.train_config.model_type.is_flux():
+                self.presets = flux_presets
+            elif self.train_config.model_type.is_sana():
+                self.presets = sana_presets
+            elif self.train_config.model_type.is_hunyuan_video():
+                self.presets = hunyuan_video_presets
+            elif self.train_config.model_type.is_hi_dream():
+                self.presets = hidream_presets
+            else:
+                self.presets = {"full": []}
+            self.presets_list = list(self.presets.keys()) + ["custom"]
 
-        self.scroll_frame.grid_columnconfigure(0, weight=0)
-        self.scroll_frame.grid_columnconfigure(1, weight=1)
-        self.scroll_frame.grid_columnconfigure(2, weight=2)
+            self.scroll_frame.grid_columnconfigure(0, weight=0)
+            self.scroll_frame.grid_columnconfigure(1, weight=1)
+            self.scroll_frame.grid_columnconfigure(2, weight=2)
 
-        components.label(self.scroll_frame, 0, 0, "Type",
-                         tooltip="The type of low-parameter finetuning method.")
-        # This will instantly call self.setup_lora.
-        components.options_kv(self.scroll_frame, 0, 1, [
-            ("LoRA", PeftType.LORA),
-            ("LoHa", PeftType.LOHA),
-        ], self.ui_state, "peft_type", command=self.setup_lora)
+            components.label(self.scroll_frame, 0, 0, "Type",
+                             tooltip="The type of low-parameter finetuning method.")
+            # This will instantly call self.setup_lora.
+            components.options_kv(self.scroll_frame, 0, 1, [
+                ("LoRA", PeftType.LORA),
+                ("LoHa", PeftType.LOHA),
+            ], self.ui_state, "peft_type", command=self.setup_lora)
+            
+        except Exception as e:
+            print(f"[ERROR] LoraTab: refresh_ui failed: {e}")
+            import traceback
+            traceback.print_exc()
 
     def setup_lora(self, peft_type: PeftType):
         name = "LoHa" if peft_type == PeftType.LOHA else "LoRA"

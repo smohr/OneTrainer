@@ -230,8 +230,13 @@ def options_adv(master, row, column, values, ui_state: UIState, var_name: str,
     button_component = ctk.CTkButton(frame, text="…", width=20, command=adv_command)
     button_component.grid(row=0, column=1, padx=(0, PAD), pady=PAD, sticky="nsew")
 
+    # Call command with error handling to set initial value
     if command:
-        command(ui_state.get_var(var_name).get())  # call command once to set the initial value
+        try:
+            command(ui_state.get_var(var_name).get())
+        except Exception:
+            # Silently handle initial command failures during UI construction
+            pass
 
     # temporary fix until https://github.com/TomSchimansky/CustomTkinter/pull/2246 is merged
     def create_destroy(component):
@@ -245,7 +250,7 @@ def options_adv(master, row, column, values, ui_state: UIState, var_name: str,
 
     destroy = create_destroy(component._dropdown_menu)
     component._dropdown_menu.destroy = lambda: destroy(component._dropdown_menu)
-
+    
     return frame, {'component': component, 'button_component': button_component}
 
 

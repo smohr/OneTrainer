@@ -518,14 +518,20 @@ class TrainUI(ctk.CTk):
         return frame
 
     def change_model_type(self, model_type: ModelType):
-        if self.model_tab:
-            self.model_tab.refresh_ui()
+        try:
+            if self.model_tab:
+                self.model_tab.refresh_ui()
 
-        if self.training_tab:
-            self.training_tab.refresh_ui()
+            if self.training_tab:
+                self.training_tab.refresh_ui()
 
-        if self.lora_tab:
-            self.lora_tab.refresh_ui()
+            if self.lora_tab:
+                self.lora_tab.refresh_ui()
+                
+        except Exception as e:
+            print(f"[ERROR] TrainUI: Error during model type change: {e}")
+            import traceback
+            traceback.print_exc()
 
     def change_training_method(self, training_method: TrainingMethod):
         if not self.tabview:
